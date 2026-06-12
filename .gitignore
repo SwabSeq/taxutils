@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 
 # Build and packaging output
+dev/
 build/
 dist/
 *.egg-info/
