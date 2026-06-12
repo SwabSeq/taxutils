@@ -68,6 +68,13 @@ accessions_no_version = tu.parse_accession(headers_or_strings, version=False)
 
 Inputs may be a string, list, pandas Series, or numpy array. Strings can be raw accession IDs or larger FASTA headers. Keep versions by default.
 
+For many headers or strings, pass the batch directly:
+
+```python
+headers = [">NC_045512.2 SARS-CoV-2", ">NZ_CP011077.1 bacterial genome"]
+acc_ids = tu.parse_accession(headers)
+```
+
 For a FASTA file:
 
 ```python

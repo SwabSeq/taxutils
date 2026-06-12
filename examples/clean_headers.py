@@ -4,6 +4,9 @@ import tempfile
 
 from taxutils import taxutils
 
+BUFFER_SIZE = 1_000_000
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Replace FASTA headers with cleaned accession-only headers."
@@ -23,31 +26,53 @@ def parse_args():
     return parser.parse_args()
 
 
-def clean_header(line, tu, line_number):
-    accessions = tu.parse_accession(line)
-    if not accessions:
-        raise ValueError(f"No accession found in FASTA header on line {line_number}: {line.strip()}")
-    return f">{accessions[0]}\n"
+def first_accessions(headers, line_numbers, tu):
+    accessions = tu.parse_accession(headers)
+    if len(accessions) == len(headers):
+        return accessions
+
+    first = []
+    for header, line_number in zip(headers, line_numbers):
+        accessions = tu.parse_accession(header)
+        if not accessions:
+            raise ValueError(f"No accession found in FASTA header on line {line_number}: {header.strip()}")
+        first.append(accessions[0])
+    return first
+
+
+def write_buffer(out_f, lines, header_positions, header_lines, header_line_numbers, tu):
+    accessions = first_accessions(header_lines, header_line_numbers, tu)
+    for position, accession in zip(header_positions, accessions):
+        lines[position] = f">{accession}\n"
+    out_f.writelines(lines)
 
 
 def write_clean_fasta(input_path, output_path, tu):
-    buffer = []
+    lines = []
+    header_positions = []
+    header_lines = []
+    header_line_numbers = []
     buffer_size = 0
 
     def flush(out_f):
-        nonlocal buffer, buffer_size
-        if buffer:
-            out_f.writelines(buffer)
-            buffer = []
+        nonlocal lines, header_positions, header_lines, header_line_numbers, buffer_size
+        if lines:
+            write_buffer(out_f, lines, header_positions, header_lines, header_line_numbers, tu)
+            lines = []
+            header_positions = []
+            header_lines = []
+            header_line_numbers = []
             buffer_size = 0
 
     with open(input_path) as in_f, open(output_path, "w") as out_f:
         for line_number, line in enumerate(in_f, start=1):
             if line.startswith(">"):
-                line = clean_header(line, tu, line_number)
-            buffer.append(line)
+                header_positions.append(len(lines))
+                header_lines.append(line)
+                header_line_numbers.append(line_number)
+            lines.append(line)
             buffer_size += len(line)
-            if buffer_size >= 1_000_000:
+            if buffer_size >= BUFFER_SIZE:
                 flush(out_f)
         flush(out_f)
 
