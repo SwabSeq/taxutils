@@ -5,10 +5,14 @@ Utilities for working with NCBI taxonomic data, accession-to-taxon mappings, tax
 # Install
 
 ### Conda Formula
+```bash
 conda install bioconda::taxutils
+```
 
 ### Pip Formula
+```bash
 pip install taxutils
+```
 
 # Setup
 
