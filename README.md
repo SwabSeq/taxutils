@@ -38,7 +38,7 @@ Core functions are listed here. See the example notebook for a fuller walkthroug
 
 ```python
 # Build object
-tu = taxutils(accessions=None, low_memory=True, targets_json=None)
+tu = taxutils(accessions=None, low_memory=True, targets_json=None, rebuild=False)
 
 # Accession parsing and mapping
 tu.parse_accession(header_strings, version=True)
@@ -56,7 +56,7 @@ tu.get_rank_order()
 tu.higher_than_rank(taxa, rank)
 ```
 
-In taxutils, `accessions=list/of/accessions` can be passed to call load_a2t on construction of the taxutils object. A custom targets_json can similarly be passed in lieu of the default json explained below.  `load_a2t` overwrites `tu.a2t` by default; pass `extend=True` to add missing mappings without discarding existing ones. Method-level `low_memory=None` uses the mode set when `tu` was built.
+In taxutils, `accessions=list/of/accessions` can be passed to call load_a2t on construction of the taxutils object. A custom targets_json can similarly be passed in lieu of the default json explained below. `rebuild=True` redownloads the managed taxonomy, target, and accession files and rebuilds the SQLite accession database without clearing the whole save folder. `load_a2t` overwrites `tu.a2t` by default; pass `extend=True` to add missing mappings without discarding existing ones. Method-level `low_memory=None` uses the mode set when `tu` was built.
 
 # Rank correction
 

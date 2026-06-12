@@ -39,6 +39,12 @@ For faster repeated accession lookups, build/reuse the SQLite database:
 tu = taxutils(low_memory=False)
 ```
 
+To force fresh managed resource files and rebuild the accession SQLite database:
+
+```python
+tu = taxutils(rebuild=True)
+```
+
 ## Core object
 
 Important public members:
@@ -139,7 +145,7 @@ tu.get_rank_order()
 # ['U', 'R', 'D', 'K', 'P', 'C', 'O', 'F', 'G', 'S'] 
 ```
 
-The rank order codes can be mapped in nodes from `rank_base` to new_rank, rank, etc.
+The rank order codes can be mapped in nodes from `rank_base` to new_rank, rank, etc. "U" is unclassified.
 
 
 Rank filtering:

@@ -6,6 +6,7 @@ from collections import defaultdict
 from typing import List
 from dataclasses import dataclass
 import os, json, urllib.request, tarfile, gzip
+import shutil
 import sqlite3
 
 from .utils import (
@@ -19,6 +20,16 @@ from .utils import (
 )
 
 logger = get_logger(__name__)
+
+
+def _download_file(url, path):
+    tmp_path = f"{path}.tmp"
+    try:
+        urllib.request.urlretrieve(url, tmp_path)
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 @dataclass
 class TaxonomicUtils:
@@ -153,7 +164,12 @@ class TaxonomicUtils:
             dtype=bool,
         )
 
-def download_taxonomy(accessions: List[str]=None, low_memory: bool=True, targets_json=None) -> TaxonomicUtils:
+def download_taxonomy(
+    accessions: List[str]=None,
+    low_memory: bool=True,
+    targets_json=None,
+    rebuild: bool=False,
+) -> TaxonomicUtils:
     """Download/load taxonomy resources and return a TaxonomicUtils object."""
     save_path = TAXUTILS_GLOBALS["save_folder"]
     os.makedirs(save_path, exist_ok=True)
@@ -161,16 +177,25 @@ def download_taxonomy(accessions: List[str]=None, low_memory: bool=True, targets
     names_path = os.path.join(save_path, "names.dmp")
     nodes_path = os.path.join(save_path, "nodes.dmp")
 
-    if not (os.path.exists(names_path) and os.path.exists(nodes_path)):
+    if rebuild or not (os.path.exists(names_path) and os.path.exists(nodes_path)):
         logger.info(f"Downloading {names_path}, {nodes_path}...")
         tarball_path = os.path.join(save_path, "taxdump.tar.gz")
         url = "https://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz"
-        urllib.request.urlretrieve(url, tarball_path)
+        _download_file(url, tarball_path)
 
         with tarfile.open(tarball_path, "r:gz") as tar:
-            for member in tar.getmembers():
-                if member.name in ["names.dmp", "nodes.dmp"]:
-                    tar.extract(member, path=save_path)
+            members = {member.name: member for member in tar.getmembers()}
+            for filename, output_path in [
+                ("names.dmp", names_path),
+                ("nodes.dmp", nodes_path),
+            ]:
+                if filename not in members:
+                    raise RuntimeError(f"Could not find {filename} in taxdump.")
+                source = tar.extractfile(members[filename])
+                if source is None:
+                    raise RuntimeError(f"Could not extract {filename} from taxdump.")
+                with source, open(output_path, "wb") as out:
+                    shutil.copyfileobj(source, out)
 
         os.remove(tarball_path)
     else:
@@ -181,11 +206,11 @@ def download_taxonomy(accessions: List[str]=None, low_memory: bool=True, targets
 
     if targets_json is None:
         targets_json = os.path.join(save_path, "targets.json")
-        if not os.path.exists(targets_json):
+        if rebuild or not os.path.exists(targets_json):
             for url in TAXUTILS_GLOBALS["pathogen_dict_urls"]:
                 try:
                     logger.info(f"Downloading targets.json from {url}...")
-                    urllib.request.urlretrieve(url, targets_json)
+                    _download_file(url, targets_json)
                     break
                 except Exception as e:
                     logger.warning(f"Failed to download from {url}: {e}")
@@ -196,8 +221,8 @@ def download_taxonomy(accessions: List[str]=None, low_memory: bool=True, targets
     nodes = build_nodes(nodes_path, names)
     parent = build_parent(nodes)
     target_taxa = build_target_taxa(nodes, names, targets_json=targets_json)
-    if not low_memory:
-        _ensure_default_a2t_db()
+    if rebuild or not low_memory:
+        _ensure_default_a2t_db(rebuild=rebuild)
     a2t = None
     if accessions is not None:
         a2t = build_a2t(accessions, low_memory=low_memory)
@@ -214,9 +239,19 @@ def download_taxonomy(accessions: List[str]=None, low_memory: bool=True, targets
     )
 
 
-def taxutils(accessions: List[str]=None, low_memory: bool=True, targets_json=None) -> TaxonomicUtils:
+def taxutils(
+    accessions: List[str]=None,
+    low_memory: bool=True,
+    targets_json=None,
+    rebuild: bool=False,
+) -> TaxonomicUtils:
     """Build and return a TaxonomicUtils object."""
-    return download_taxonomy(accessions=accessions, low_memory=low_memory, targets_json=targets_json)
+    return download_taxonomy(
+        accessions=accessions,
+        low_memory=low_memory,
+        targets_json=targets_json,
+        rebuild=rebuild,
+    )
 
     
 def _as_taxa_list(taxa):
@@ -264,10 +299,12 @@ def _rank_to_code(rank):
     return RANK_ALIASES[key]
 
 
-def _ensure_a2t_db(gz_path, a2t_db, verbose=True):
+def _ensure_a2t_db(gz_path, a2t_db, verbose=True, rebuild=False):
     """Build the SQLite a2t db from gz if it doesn't exist, ensuring both indexes exist."""
     if not os.path.exists(gz_path):
         gz_path = download_a2t(verbose=verbose)
+    if rebuild and os.path.exists(a2t_db):
+        os.remove(a2t_db)
     if not os.path.exists(a2t_db):
         logger.info("Building SQLite db from gz file, this will take a while...")
         conn = sqlite3.connect(a2t_db)
@@ -298,19 +335,19 @@ def _ensure_a2t_db(gz_path, a2t_db, verbose=True):
         conn.close()
 
 
-def _ensure_default_a2t_db(verbose=True):
-    gz_path = download_a2t(verbose=verbose)
+def _ensure_default_a2t_db(verbose=True, rebuild=False):
+    gz_path = download_a2t(verbose=verbose, rebuild=rebuild)
     a2t_db = os.path.join(TAXUTILS_GLOBALS["save_folder"], "nucl_gb.accession2taxid.db")
-    _ensure_a2t_db(gz_path, a2t_db, verbose=verbose)
+    _ensure_a2t_db(gz_path, a2t_db, verbose=verbose, rebuild=rebuild)
     return gz_path, a2t_db
 
-def download_a2t(verbose=True):
+def download_a2t(verbose=True, rebuild=False):
     gz_path = os.path.join(TAXUTILS_GLOBALS["save_folder"], "nucl_gb.accession2taxid.gz")
     a2t_url = "https://ftp.ncbi.nih.gov/pub/taxonomy/accession2taxid/nucl_gb.accession2taxid.gz"
-    if not os.path.exists(gz_path):
+    if rebuild or not os.path.exists(gz_path):
         os.makedirs(os.path.dirname(gz_path), exist_ok=True)
         logger.info(f"Downloading {gz_path}...")
-        urllib.request.urlretrieve(a2t_url, gz_path)
+        _download_file(a2t_url, gz_path)
     else:
         if verbose:
             logger.info(f"{gz_path} already exists, skipping download.")
