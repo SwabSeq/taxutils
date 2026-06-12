@@ -49,6 +49,7 @@ tu.get_t2a(taxa, low_memory=None)
 tu.get_branch(taxon)
 tu.get_subtree(taxon)
 tu.get_lca(taxon_a, taxon_b)
+tu.get_distance(taxon_a, taxon_b)
 tu.sort_taxa(taxa)
 tu.format_tree(taxa, include_ancestors=True, root=1, indent="\t")
 
@@ -58,6 +59,10 @@ tu.higher_than_rank(taxa, rank)
 ```
 
 In taxutils, `accessions=list/of/accessions` can be passed to call load_a2t on construction of the taxutils object. A custom targets_json can similarly be passed in lieu of the default json explained below. `rebuild=True` redownloads the managed taxonomy, target, and accession files and rebuilds the SQLite accession database. `load_a2t` overwrites `tu.a2t` by default; pass `extend=True` to add missing mappings without discarding existing ones. Method-level `low_memory=None` uses the mode set when `tu` was built.
+
+`get_lca(a, b)` returns the lowest common ancestor of two taxa. `get_distance(a, b)` returns the edge distance between two taxa through their lowest common ancestor. Depths are cached lazily as these methods are called.
+
+`tu.target_taxa` contains the default pathogen-derived target taxa. Use it directly for target filtering or movement checks.
 
 # Rank correction
 

@@ -44,6 +44,7 @@ class TaxonomicUtils:
         if self.parent is None:
             self.parent = build_parent(self.nodes)
         self._tree = None
+        self._depth = {}
         self._a2t_checked = False
     
     def __repr__(self):
@@ -123,6 +124,26 @@ class TaxonomicUtils:
                 tree[int(v)].append(int(k))
         self._tree = tree
 
+    def _get_depth(self, taxon):
+        taxon = int(taxon)
+        if taxon in self._depth:
+            return self._depth[taxon]
+
+        path = []
+        seen = set()
+        cur = taxon
+        while cur is not None and cur not in seen and cur not in self._depth:
+            path.append(cur)
+            seen.add(cur)
+            parent = self.parent.get(cur)
+            cur = None if parent == cur else parent
+
+        depth = self._depth.get(cur, -1)
+        for node in reversed(path):
+            depth += 1
+            self._depth[node] = depth
+        return self._depth[taxon]
+
     def get_subtree(self, taxon):
         """Return all descendant taxa for a taxon, including the taxon itself."""
         if self._tree is None:
@@ -167,7 +188,20 @@ class TaxonomicUtils:
 
     def get_lca(self, a, b):
         """Return the lowest common ancestor taxon for two taxa."""
-        return get_lca(int(a), int(b), self.parent)
+        a = int(a)
+        b = int(b)
+        self._get_depth(a)
+        self._get_depth(b)
+        return get_lca(a, b, self.parent, self._depth)
+
+    def get_distance(self, a, b):
+        """Return edge distance between two taxa through their lowest common ancestor."""
+        a = int(a)
+        b = int(b)
+        self._get_depth(a)
+        self._get_depth(b)
+        lca = get_lca(a, b, self.parent, self._depth)
+        return self._depth.get(a, 0) + self._depth.get(b, 0) - 2 * self._depth.get(lca, 0)
 
     def get_branch(self, taxon):
         """Return the root-to-taxon branch for a taxon."""
@@ -634,23 +668,43 @@ def build_target_taxa(nodes, names, targets_json):
 
     return taxonomic_order(taxa, parent, rank, names)
 
-def get_lca(a, b, parent_dict):
+def get_lca(a, b, parent_dict, depth=None):
     if a == b:
         return a
-    path_a = []
-    cur = a
-    while cur:
-        path_a.append(cur)
-        cur = parent_dict.get(cur)
-    path_b = []
-    cur = b
-    while cur:
-        path_b.append(cur)
-        cur = parent_dict.get(cur)
-    path_a = path_a[::-1]  # leaf to root reversed to root to leaf
-    path_b = path_b[::-1]
-    i = 0
-    min_len = min(len(path_a), len(path_b))
-    while i < min_len and path_a[i] == path_b[i]:
-        i += 1
-    return int(path_a[i-1]) if i > 0 else 1
+    if depth is None:
+        path_a = []
+        cur = a
+        while cur:
+            path_a.append(cur)
+            cur = parent_dict.get(cur)
+        path_b = []
+        cur = b
+        while cur:
+            path_b.append(cur)
+            cur = parent_dict.get(cur)
+        path_a = path_a[::-1]
+        path_b = path_b[::-1]
+        i = 0
+        min_len = min(len(path_a), len(path_b))
+        while i < min_len and path_a[i] == path_b[i]:
+            i += 1
+        return int(path_a[i-1]) if i > 0 else 1
+
+    a = int(a)
+    b = int(b)
+    depth_a = depth.get(a, 0)
+    depth_b = depth.get(b, 0)
+
+    while depth_a > depth_b:
+        a = parent_dict.get(a)
+        depth_a -= 1
+    while depth_b > depth_a:
+        b = parent_dict.get(b)
+        depth_b -= 1
+
+    while a != b:
+        a = parent_dict.get(a)
+        b = parent_dict.get(b)
+        if a is None or b is None:
+            return 1
+    return int(a)
