@@ -1,18 +1,22 @@
 # taxutils.py
 
 import pandas as pd
+import numpy as np
 from collections import defaultdict
 from typing import List
 from dataclasses import dataclass
-import os, json, urllib, tarfile, logging, gzip, re
+import os, json, urllib.request, tarfile, gzip, re
 import sqlite3, subprocess
 
-from .utils import TAXUTILS_GLOBALS, get_logger
+try:
+    from .utils import TAXUTILS_GLOBALS, get_logger
+except ImportError:
+    from utils import TAXUTILS_GLOBALS, get_logger
 
 logger = get_logger(__name__)
 
 @dataclass
-class TaxonomicData:
+class TaxonomicUtils:
     names: dict
     nodes: dict
     target_taxids: set
@@ -34,7 +38,7 @@ class TaxonomicData:
             else:
                 fields.append(f"{f}={type(val).__name__}")
         body = ",\n  ".join(fields)
-        return f"TaxonomicData(\n  {body}\n)"
+        return f"TaxonomicUtils(\n  {body}\n)"
         
     def load_a2t(self, accessions: List[str], sqlite: bool = True):
         self.a2t = build_a2t(accessions, sqlite=sqlite)
@@ -104,7 +108,7 @@ def extract_accession_ids(fasta_path):
     
     return accession_ids
 
-def download_taxonomy(accessions: List[str]=None, sqlite: bool=True, pathogen_json=None) -> TaxonomicData:
+def download_taxonomy(accessions: List[str]=None, sqlite: bool=True, pathogen_json=None) -> TaxonomicUtils:
     save_path = TAXUTILS_GLOBALS["save_folder"]
     os.makedirs(save_path, exist_ok=True)
 
@@ -151,7 +155,14 @@ def download_taxonomy(accessions: List[str]=None, sqlite: bool=True, pathogen_js
         a2t[TAXUTILS_GLOBALS["UNMAPPED"]] = "unmapped"
     names[2697049] = "SARS-CoV-2"
     names[694009] = "SARS-related-CoV"
-    return TaxonomicData(names=names, nodes=nodes, target_taxids=target_taxids, a2t=a2t)
+    return TaxonomicUtils(names=names, nodes=nodes, target_taxids=target_taxids, a2t=a2t)
+
+
+def taxutils(accessions: List[str]=None, sqlite: bool=True, pathogen_json=None) -> TaxonomicUtils:
+    return download_taxonomy(accessions=accessions, sqlite=sqlite, pathogen_json=pathogen_json)
+
+
+TaxonomicData = TaxonomicUtils
 
     
 def _ensure_a2t_db(gz_path, a2t_db):
@@ -497,4 +508,3 @@ def get_lca(a, b, parent_dict):
     while i < min_len and path_a[i] == path_b[i]:
         i += 1
     return int(path_a[i-1]) if i > 0 else 1
-

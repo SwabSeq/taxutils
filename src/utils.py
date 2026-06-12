@@ -1,19 +1,9 @@
 # global_utils.py
 
-import json
 import os
-import sys
-import time
-from contextlib import ContextDecorator
-from datetime import datetime, timezone
-
-try:
-    import resource
-except ImportError:  # pragma: no cover
-    resource = None
 
 TAXUTILS_GLOBALS = dict()
-TAXUTILS["save_folder"] = os.path.expanduser(os.environ.get("TAXUTILS_GLOBALS", "./taxutils/"))
+TAXUTILS_GLOBALS["save_folder"] = os.path.expanduser(os.environ.get("TAXUTILS_GLOBALS", "./taxutils/"))
 TAXUTILS_GLOBALS["pathogen_dict_urls"] = [
     "https://web.cs.ucla.edu/~wob/projects/trident/targets.json",
 ]
