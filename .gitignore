@@ -9,6 +9,7 @@ build/
 dist/
 *.egg-info/
 .eggs/
+manuscript/
 
 # Virtual environments
 .venv/
