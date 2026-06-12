@@ -8,10 +8,7 @@ from dataclasses import dataclass
 import os, json, urllib.request, tarfile, gzip, re
 import sqlite3, subprocess
 
-try:
-    from .utils import TAXUTILS_GLOBALS, get_logger
-except ImportError:
-    from utils import TAXUTILS_GLOBALS, get_logger
+from .utils import TAXUTILS_GLOBALS, get_logger
 
 logger = get_logger(__name__)
 

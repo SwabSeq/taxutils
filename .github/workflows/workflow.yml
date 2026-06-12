@@ -37,10 +37,10 @@ jobs:
       - name: Check imports
         run: |
           python - <<'PY'
-          from taxutils import TaxonomicData, TaxonomicUtils, taxutils
+          from taxutils import taxutils
 
-          assert TaxonomicData is TaxonomicUtils
           assert callable(taxutils)
+          assert taxutils.__module__ == "taxutils.taxutils"
           PY
 
       - name: Compile source

@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Utilities for working with taxonomic data."
 readme = "README.md"
 requires-python = ">=3.10"
+license = "MIT"
 authors = [
     {name = "William O'Brien", email = "wob@cs.ucla.edu"},
 ]
@@ -29,4 +30,7 @@ classifiers = [
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-py-modules = ["taxutils", "utils"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["taxutils*"]
