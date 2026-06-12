@@ -60,15 +60,29 @@ class TaxonomicUtils:
         body = ",\n  ".join(fields)
         return f"TaxonomicUtils(\n  {body}\n)"
         
-    def load_a2t(self, accessions: List[str], low_memory: bool = None):
-        """Load accession-to-taxon mappings for the provided accessions."""
+    def load_a2t(self, accessions: List[str], low_memory: bool = None, extend: bool = False):
+        """Load accession-to-taxon mappings, optionally extending the existing map."""
         if low_memory is None:
             low_memory = self._low_memory
+        if extend:
+            existing = dict(self.a2t or {})
+            accessions = sorted({
+                accession
+                for accession in parse_accession(accessions, version=True)
+                if accession not in existing
+            })
+            if not accessions:
+                self.a2t = existing
+                self._a2t_checked = True
+                return
         self.a2t = build_a2t(
             accessions,
             low_memory=low_memory,
             verbose=not self._a2t_checked,
         )
+        if extend:
+            existing.update(self.a2t or {})
+            self.a2t = existing
         self._a2t_checked = True
 
     def parse_accession(self, strings, version: bool = True):
@@ -139,7 +153,7 @@ class TaxonomicUtils:
             dtype=bool,
         )
 
-def download_taxonomy(accessions: List[str]=None, low_memory: bool=True, pathogen_json=None) -> TaxonomicUtils:
+def download_taxonomy(accessions: List[str]=None, low_memory: bool=True, targets_json=None) -> TaxonomicUtils:
     """Download/load taxonomy resources and return a TaxonomicUtils object."""
     save_path = TAXUTILS_GLOBALS["save_folder"]
     os.makedirs(save_path, exist_ok=True)
@@ -165,23 +179,23 @@ def download_taxonomy(accessions: List[str]=None, low_memory: bool=True, pathoge
             f"({save_path}), skipping download."
         )
 
-    if pathogen_json is None:
-        pathogen_json = os.path.join(save_path, "pathogen_dict.json")
-        if not os.path.exists(pathogen_json):
+    if targets_json is None:
+        targets_json = os.path.join(save_path, "targets.json")
+        if not os.path.exists(targets_json):
             for url in TAXUTILS_GLOBALS["pathogen_dict_urls"]:
                 try:
-                    logger.info(f"Downloading pathogen_dict.json from {url}...")
-                    urllib.request.urlretrieve(url, pathogen_json)
+                    logger.info(f"Downloading targets.json from {url}...")
+                    urllib.request.urlretrieve(url, targets_json)
                     break
                 except Exception as e:
                     logger.warning(f"Failed to download from {url}: {e}")
             else:
-                raise RuntimeError("Could not download pathogen_dict.json from any URL.")
+                raise RuntimeError("Could not download targets.json from any URL.")
     logger.info(f"Building nodes...")
     names = build_names(names_path)
     nodes = build_nodes(nodes_path, names)
     parent = build_parent(nodes)
-    target_taxa = build_target_taxa(nodes, names, pathogen_json=pathogen_json)
+    target_taxa = build_target_taxa(nodes, names, targets_json=targets_json)
     if not low_memory:
         _ensure_default_a2t_db()
     a2t = None
@@ -200,9 +214,9 @@ def download_taxonomy(accessions: List[str]=None, low_memory: bool=True, pathoge
     )
 
 
-def taxutils(accessions: List[str]=None, low_memory: bool=True, pathogen_json=None) -> TaxonomicUtils:
+def taxutils(accessions: List[str]=None, low_memory: bool=True, targets_json=None) -> TaxonomicUtils:
     """Build and return a TaxonomicUtils object."""
-    return download_taxonomy(accessions=accessions, low_memory=low_memory, pathogen_json=pathogen_json)
+    return download_taxonomy(accessions=accessions, low_memory=low_memory, targets_json=targets_json)
 
     
 def _as_taxa_list(taxa):
@@ -516,8 +530,8 @@ def get_parents(taxon, parent_map, rank_idx, rank="F"):
         parents.add(cur_node)
     return parents
     
-def build_target_taxa(nodes, names, pathogen_json):
-    with open(pathogen_json) as f:
+def build_target_taxa(nodes, names, targets_json):
+    with open(targets_json) as f:
         pdict = json.load(f)
     pathogen_taxa = {int(v) for v in pdict["pathogens"].values()}
 

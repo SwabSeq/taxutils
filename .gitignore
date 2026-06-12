@@ -32,6 +32,7 @@ htmlcov/
 names.dmp
 nodes.dmp
 taxdump.tar.gz
+targets.json
 pathogen_dict.json
 *.accession2taxid.gz
 *.accession2taxid.db
