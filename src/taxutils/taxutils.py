@@ -5,10 +5,18 @@ import numpy as np
 from collections import defaultdict
 from typing import List
 from dataclasses import dataclass
-import os, json, urllib.request, tarfile, gzip, re
-import sqlite3, subprocess
+import os, json, urllib.request, tarfile, gzip
+import sqlite3
 
-from .utils import TAXUTILS_GLOBALS, get_logger
+from .utils import (
+    ACCESSION_PATTERN,
+    CANONICAL_RANK_NAMES,
+    MAJOR_RANK_TO_CODE,
+    RANK_ALIASES,
+    RANK_ORDER,
+    TAXUTILS_GLOBALS,
+    get_logger,
+)
 
 logger = get_logger(__name__)
 
@@ -16,15 +24,22 @@ logger = get_logger(__name__)
 class TaxonomicUtils:
     names: dict
     nodes: dict
-    target_taxids: set
+    target_taxa: list
     a2t: dict = None
-    tree: defaultdict = None
-    _is_matched: bool = False
     parent: dict = None
+    _low_memory: bool = True
+
+    def __post_init__(self):
+        if self.parent is None:
+            self.parent = build_parent(self.nodes)
+        self._tree = None
+        self._a2t_checked = False
     
     def __repr__(self):
         fields = []
         for f in self.__dataclass_fields__:
+            if f.startswith("_"):
+                continue
             val = getattr(self, f)
             if val is None:
                 fields.append(f"{f}=None")
@@ -34,78 +49,98 @@ class TaxonomicUtils:
                 fields.append(f"{f}={type(val).__name__}({len(val)} items)")
             else:
                 fields.append(f"{f}={type(val).__name__}")
+        methods = [
+            name
+            for name in dir(self)
+            if not name.startswith("_")
+            and callable(getattr(self, name))
+            and name not in self.__dataclass_fields__
+        ]
+        fields.append(f"methods={methods}")
         body = ",\n  ".join(fields)
         return f"TaxonomicUtils(\n  {body}\n)"
         
-    def load_a2t(self, accessions: List[str], sqlite: bool = True):
-        self.a2t = build_a2t(accessions, sqlite=sqlite)
-
-    def load_tree(self):
-        parent = dict(zip(
-            self.nodes["taxid"],
-            self.nodes["parent"])
+    def load_a2t(self, accessions: List[str], low_memory: bool = None):
+        """Load accession-to-taxon mappings for the provided accessions."""
+        if low_memory is None:
+            low_memory = self._low_memory
+        self.a2t = build_a2t(
+            accessions,
+            low_memory=low_memory,
+            verbose=not self._a2t_checked,
         )
-        parent[1] = None
+        self._a2t_checked = True
+
+    def parse_accession(self, strings, version: bool = True):
+        """Return accession IDs parsed from strings."""
+        return parse_accession(strings, version=version)
+
+    def get_rank_order(self):
+        """Return canonical rank codes in taxonomic order."""
+        return list(RANK_ORDER)
+
+    def get_t2a(self, taxa, low_memory: bool = None):
+        """Return accessions assigned to the provided taxa."""
+        if low_memory is None:
+            low_memory = self._low_memory
+        accessions = get_t2a(
+            taxa,
+            low_memory=low_memory,
+            verbose=not self._a2t_checked,
+        )
+        self._a2t_checked = True
+        return accessions
+
+    def _load_tree(self):
         tree = defaultdict(list)
-        for k, v in parent.items():
+        for k, v in self.parent.items():
             if v is not None:
                 tree[int(v)].append(int(k))
-        self.tree = tree
+        self._tree = tree
 
-    def get_subtree(self, taxid):
-        if self.tree is None:
-            self.load_tree()
-        result = [taxid]
-        if taxid in self.tree:
-            for child in self.tree[taxid]:
-                result.extend(get_subtree(child, self.tree))
+    def get_subtree(self, taxon):
+        """Return all descendant taxa for a taxon, including the taxon itself."""
+        if self._tree is None:
+            self._load_tree()
+        result = [taxon]
+        if taxon in self._tree:
+            for child in self._tree[taxon]:
+                result.extend(get_subtree(child, self._tree))
         return result
 
-    def match_library(self, config):
-        logger.info("Matching library to target taxa.")
-        acc_ids = extract_accession_ids(config.library)
-        self.load_a2t(acc_ids, sqlite=config.sqlite)
-        library_taxids = set()
-        for acc_id in acc_ids:
-            add_to_lib = self.a2t.get(acc_id, None)
-            if add_to_lib is not None:
-                library_taxids.add(add_to_lib)
-        
-        if self.tree is None:
-            self.load_tree()
-        parent = dict(zip(self.nodes['taxid'], self.nodes['parent']))
-        parent[1] = None
-        higher_than_F = dict(zip(self.nodes['taxid'], self.nodes['higher_than_F']))
-        
-        target_set = set(self.target_taxids)
-        matched = target_set.intersection(library_taxids)
-        
-        for tid in library_taxids:
-            cur = parent.get(tid)
-            while cur is not None and not higher_than_F.get(cur, True):
-                if cur in target_set:
-                    matched.add(cur)
-                cur = parent.get(cur)
-        
-        self.target_taxids = matched
-        self._is_matched = True
+    def sort_taxa(self, taxa):
+        """Return unique taxa sorted in taxonomic order."""
+        present = set(_as_taxa_list(taxa))
+        rank = dict(zip(self.nodes["taxon"], self.nodes["rank_code"]))
+        return taxonomic_order(present, self.parent, rank, self.names)
 
-    def load_parent(self):
-        self.parent = dict(zip(self.nodes["taxid"], self.nodes["parent"]))
+    def get_lca(self, a, b):
+        """Return the lowest common ancestor taxon for two taxa."""
+        return get_lca(int(a), int(b), self.parent)
 
-def extract_accession_ids(fasta_path):
-    """Extract accession IDs with version numbers from FASTA headers using grep."""
-    result = subprocess.run(
-        ['grep', '-o', '^>.*', fasta_path],
-        capture_output=True, text=True
-    )
-    
-    headers = result.stdout
-    accession_ids = re.findall(r'[A-Z]{1,2}_?\d+\.\d+', headers)
-    
-    return accession_ids
+    def get_branch(self, taxon):
+        """Return the root-to-taxon branch for a taxon."""
+        branch = []
+        cur = int(taxon)
+        seen = set()
+        while cur is not None and cur not in seen:
+            branch.append(cur)
+            seen.add(cur)
+            cur = self.parent.get(cur)
+        return branch[::-1]
 
-def download_taxonomy(accessions: List[str]=None, sqlite: bool=True, pathogen_json=None) -> TaxonomicUtils:
+    def higher_than_rank(self, taxa, rank):
+        """Return booleans indicating whether taxa are higher than the given rank."""
+        rank_code = _rank_to_code(rank)
+        threshold = RANK_ORDER[rank_code]
+        rank_idx = dict(zip(self.nodes["taxon"], self.nodes["rank_idx"]))
+        return np.array(
+            [rank_idx.get(taxon, threshold) < threshold for taxon in _as_taxa_list(taxa)],
+            dtype=bool,
+        )
+
+def download_taxonomy(accessions: List[str]=None, low_memory: bool=True, pathogen_json=None) -> TaxonomicUtils:
+    """Download/load taxonomy resources and return a TaxonomicUtils object."""
     save_path = TAXUTILS_GLOBALS["save_folder"]
     os.makedirs(save_path, exist_ok=True)
 
@@ -125,7 +160,10 @@ def download_taxonomy(accessions: List[str]=None, sqlite: bool=True, pathogen_js
 
         os.remove(tarball_path)
     else:
-        logger.info(f"names.dmp and nodes.dmp exist in {save_path}, skipping download.")
+        logger.info(
+            "names.dmp and nodes.dmp exist in $TAXUTILS_GLOBALS "
+            f"({save_path}), skipping download."
+        )
 
     if pathogen_json is None:
         pathogen_json = os.path.join(save_path, "pathogen_dict.json")
@@ -142,30 +180,80 @@ def download_taxonomy(accessions: List[str]=None, sqlite: bool=True, pathogen_js
     logger.info(f"Building nodes...")
     names = build_names(names_path)
     nodes = build_nodes(nodes_path, names)
-    target_taxids = build_target_taxids(
-        nodes, names, pathogen_json=pathogen_json, extra_taxids=(9606,)
-    )
+    parent = build_parent(nodes)
+    target_taxa = build_target_taxa(nodes, names, pathogen_json=pathogen_json)
+    if not low_memory:
+        _ensure_default_a2t_db()
     a2t = None
     if accessions is not None:
-        a2t = build_a2t(accessions, sqlite=sqlite)
+        a2t = build_a2t(accessions, low_memory=low_memory)
         a2t[TAXUTILS_GLOBALS["UNCLASSIFIED"]] = "unclassified"
-        a2t[TAXUTILS_GLOBALS["UNMAPPED"]] = "unmapped"
     names[2697049] = "SARS-CoV-2"
     names[694009] = "SARS-related-CoV"
-    return TaxonomicUtils(names=names, nodes=nodes, target_taxids=target_taxids, a2t=a2t)
+    return TaxonomicUtils(
+        names=names,
+        nodes=nodes,
+        target_taxa=target_taxa,
+        a2t=a2t,
+        parent=parent,
+        _low_memory=low_memory,
+    )
 
 
-def taxutils(accessions: List[str]=None, sqlite: bool=True, pathogen_json=None) -> TaxonomicUtils:
-    return download_taxonomy(accessions=accessions, sqlite=sqlite, pathogen_json=pathogen_json)
-
-
-TaxonomicData = TaxonomicUtils
+def taxutils(accessions: List[str]=None, low_memory: bool=True, pathogen_json=None) -> TaxonomicUtils:
+    """Build and return a TaxonomicUtils object."""
+    return download_taxonomy(accessions=accessions, low_memory=low_memory, pathogen_json=pathogen_json)
 
     
-def _ensure_a2t_db(gz_path, a2t_db):
+def _as_taxa_list(taxa):
+    if np.isscalar(taxa):
+        values = [taxa]
+    elif isinstance(taxa, pd.Series):
+        values = taxa.tolist()
+    elif isinstance(taxa, np.ndarray):
+        values = taxa.ravel().tolist()
+    else:
+        values = list(taxa)
+    return [int(t) for t in values if not pd.isna(t)]
+
+
+def _as_string_list(strings):
+    if isinstance(strings, str):
+        values = [strings]
+    elif isinstance(strings, pd.Series):
+        values = strings.tolist()
+    elif isinstance(strings, np.ndarray):
+        values = strings.ravel().tolist()
+    else:
+        values = list(strings)
+    return [str(value) for value in values if not pd.isna(value)]
+
+
+def parse_accession(strings, version: bool = True):
+    """Return accession IDs parsed from strings."""
+    accessions = []
+    for text in _as_string_list(strings):
+        for match in ACCESSION_PATTERN.finditer(text.upper()):
+            accession = match.group(1)
+            accession_version = match.group(2)
+            if version and accession_version is not None:
+                accession = f"{accession}.{accession_version}"
+            accessions.append(accession)
+    return accessions
+
+
+def _rank_to_code(rank):
+    key = str(rank).strip().upper()
+    if key not in RANK_ALIASES:
+        valid = ", ".join(RANK_ORDER)
+        raise ValueError(f"rank must be one of: {valid}")
+    return RANK_ALIASES[key]
+
+
+def _ensure_a2t_db(gz_path, a2t_db, verbose=True):
     """Build the SQLite a2t db from gz if it doesn't exist, ensuring both indexes exist."""
     if not os.path.exists(gz_path):
-        gz_path = download_a2t()
+        gz_path = download_a2t(verbose=verbose)
     if not os.path.exists(a2t_db):
         logger.info("Building SQLite db from gz file, this will take a while...")
         conn = sqlite3.connect(a2t_db)
@@ -188,14 +276,21 @@ def _ensure_a2t_db(gz_path, a2t_db):
         conn.close()
         logger.info("SQLite db built.")
     else:
-        # Ensure taxid index exists on dbs built before this index was added
+        # Ensure the taxon lookup index exists on dbs built before this index was added.
         conn = sqlite3.connect(a2t_db)
         cur = conn.cursor()
         cur.execute("CREATE INDEX IF NOT EXISTS idx_taxid ON a2t (taxid)")
         conn.commit()
         conn.close()
 
-def download_a2t():
+
+def _ensure_default_a2t_db(verbose=True):
+    gz_path = download_a2t(verbose=verbose)
+    a2t_db = os.path.join(TAXUTILS_GLOBALS["save_folder"], "nucl_gb.accession2taxid.db")
+    _ensure_a2t_db(gz_path, a2t_db, verbose=verbose)
+    return gz_path, a2t_db
+
+def download_a2t(verbose=True):
     gz_path = os.path.join(TAXUTILS_GLOBALS["save_folder"], "nucl_gb.accession2taxid.gz")
     a2t_url = "https://ftp.ncbi.nih.gov/pub/taxonomy/accession2taxid/nucl_gb.accession2taxid.gz"
     if not os.path.exists(gz_path):
@@ -203,31 +298,32 @@ def download_a2t():
         logger.info(f"Downloading {gz_path}...")
         urllib.request.urlretrieve(a2t_url, gz_path)
     else:
-        logger.info(f"{gz_path} already exists, skipping download.")
+        if verbose:
+            logger.info(f"{gz_path} already exists, skipping download.")
 
     return gz_path
 
-def build_a2t(accessions, sqlite=True):
-    gz_path = download_a2t()
+def build_a2t(accessions, low_memory=True, verbose=True):
+    accessions = parse_accession(accessions, version=True)
 
-    if not sqlite:
+    if low_memory:
+        gz_path = download_a2t(verbose=verbose)
         accession_set = set(accessions) if not isinstance(accessions, set) else accessions
         a2t = {}
         with gzip.open(gz_path, 'rt') as f:
             header = next(f).strip().split("\t")
             acc_idx = header.index("accession.version")
-            taxid_idx = header.index("taxid")
+            taxon_idx = header.index("taxid")
             for line in f:
                 parts = line.strip().split("\t")
                 if parts[acc_idx] in accession_set:
-                    a2t[parts[acc_idx]] = int(parts[taxid_idx])
+                    a2t[parts[acc_idx]] = int(parts[taxon_idx])
                     if len(a2t) == len(accession_set):
                         break
         return a2t
 
-    # sqlite path
-    a2t_db = os.path.join(TAXUTILS_GLOBALS["save_folder"], "nucl_gb.accession2taxid.db")
-    _ensure_a2t_db(gz_path, a2t_db)
+    # SQLite path
+    _, a2t_db = _ensure_default_a2t_db(verbose=verbose)
 
     conn = sqlite3.connect(a2t_db)
     acc_df = pd.DataFrame({"accession": list(accessions)})
@@ -237,37 +333,33 @@ def build_a2t(accessions, sqlite=True):
     return dict(zip(result["accession"], result["taxid"]))
 
 
-def get_accessions_for_taxids(taxids, sqlite=True):
-    """Return the set of accessions belonging to the given taxids.
+def get_t2a(taxa, low_memory=True, verbose=True):
+    """Return the set of accessions belonging to the given taxa.
 
-    When sqlite=True (default), queries the local SQLite db for speed.
-    When sqlite=False, scans the compressed gz file (keeps the file compressed
-    but is much slower).
+    When low_memory=True, scans the compressed file directly.
+    When low_memory=False, uses a local SQLite database for speed.
     """
-    gz_path = download_a2t()
-
-    if not sqlite:
-        taxid_set = {int(t) for t in taxids}
+    if low_memory:
+        gz_path = download_a2t(verbose=verbose)
+        taxon_set = {int(t) for t in taxa}
         accessions = set()
         with gzip.open(gz_path, 'rt') as f:
             header = next(f).strip().split("\t")
             acc_idx = header.index("accession.version")
-            taxid_idx = header.index("taxid")
+            taxon_idx = header.index("taxid")
             for line in f:
                 parts = line.strip().split("\t")
-                if int(parts[taxid_idx]) in taxid_set:
+                if int(parts[taxon_idx]) in taxon_set:
                     accessions.add(parts[acc_idx])
         return accessions
 
-    # sqlite path
-    a2t_db = os.path.join(TAXUTILS_GLOBALS["save_folder"], "nucl_gb.accession2taxid.db")
-    _ensure_a2t_db(gz_path, a2t_db)
+    # SQLite path
+    _, a2t_db = _ensure_default_a2t_db(verbose=verbose)
 
-    taxid_list = [int(t) for t in taxids]
     conn = sqlite3.connect(a2t_db)
-    taxid_df = pd.DataFrame({"taxid": [int(t) for t in taxids]})
-    taxid_df.to_sql("tmp_taxids", conn, if_exists="replace", index=False)
-    result = pd.read_sql("SELECT accession FROM a2t JOIN tmp_taxids ON a2t.taxid = tmp_taxids.taxid", conn)
+    taxon_df = pd.DataFrame({"taxid": [int(t) for t in taxa]})
+    taxon_df.to_sql("tmp_taxa", conn, if_exists="replace", index=False)
+    result = pd.read_sql("SELECT accession FROM a2t JOIN tmp_taxa ON a2t.taxid = tmp_taxa.taxid", conn)
     conn.close()
     return set(result["accession"])
 
@@ -320,17 +412,11 @@ def taxonomic_order(present, parent, rank, names):
             order.append(t)
     return order
 
-def get_parent_tree(taxonomic_data):
-    parent = dict(zip(
-        taxonomic_data.nodes["taxid"],
-        taxonomic_data.nodes["parent"])
-    )
+
+def build_parent(nodes):
+    parent = dict(zip(nodes["taxon"], nodes["parent"]))
     parent[1] = None
-    tree = defaultdict(list)
-    for k, v in parent.items():
-        if v is not None:
-            tree[int(v)].append(int(k))
-    return parent, tree
+    return parent
 
 def build_names(names_path):
     names = {}
@@ -338,152 +424,117 @@ def build_names(names_path):
         for line in f:
             parts = [p.strip() for p in line.split("|")]
             if len(parts) >= 4 and parts[3] == "scientific name":
-                taxid = parts[0]
+                taxon = parts[0]
                 name = parts[1]
-                names[int(taxid)] = name
-    names[TAXUTILS_GLOBALS["UNMAPPED"]] = "unmapped" # -1
+                names[int(taxon)] = name
     names[TAXUTILS_GLOBALS["UNCLASSIFIED"]] = "unclassified" # -2
     return names
 
-def get_subtree(taxid, tree):
-    """
-    Get all descendant taxids including itself.
-    """
-    result = [taxid]
-    if taxid in tree:
-        for child in tree[taxid]:
+
+def get_subtree(taxon, tree):
+    """Return all descendant taxa for a taxon from a parent-to-children tree."""
+    result = [taxon]
+    if taxon in tree:
+        for child in tree[taxon]:
             result.extend(get_subtree(child, tree))
     return result
 
-def rank_below(r):
-    order = [
-        "superkingdom",
-        "kingdom",
-        "phylum",
-        "class",
-        "order",
-        "family",
-        "genus",
-        "species"
-    ]
-    rank_index = {r: i for i, r in enumerate(order)}
-    if r == "species": return "species"
-    if r not in rank_index:
-        return None
-    i = rank_index[r]
-    if i+1 < len(order):
-        return order[i+1]
-    return None
-    
-def correct_rank(taxid, rank_map, parent, seen):
-    if taxid in seen:
-        return "root"
-    seen.add(taxid)
-    cur_rank = rank_map.get(taxid)
-    if cur_rank is None or cur_rank == "root":
-        return "root"
-    if cur_rank != "no rank":
-        return cur_rank
-    return correct_rank(parent[taxid], rank_map, parent, seen)
+
+def assign_rank_codes(parent, rank_map):
+    rank_code_cache = {}
+    visiting = set()
+
+    def code_base(code):
+        return code[0]
+
+    def code_depth(code):
+        suffix = code[1:]
+        return int(suffix) if suffix else 1
+
+    def next_subrank(code):
+        return f"{code_base(code)}{code_depth(code) + 1}"
+
+    def rank_code(taxon):
+        if taxon in rank_code_cache:
+            return rank_code_cache[taxon]
+        if taxon in visiting:
+            rank_code_cache[taxon] = "R"
+            return "R"
+
+        visiting.add(taxon)
+        if taxon == 0:
+            code = "U"
+        elif taxon == 1:
+            code = "R"
+        else:
+            raw_code = MAJOR_RANK_TO_CODE.get(rank_map.get(taxon, ""))
+            parent_taxon = parent.get(taxon)
+            if parent_taxon is None or parent_taxon == taxon or parent_taxon not in parent:
+                code = raw_code or "R"
+            else:
+                parent_code = rank_code(parent_taxon)
+                parent_base = code_base(parent_code)
+                if raw_code and RANK_ORDER[raw_code] > RANK_ORDER[parent_base]:
+                    code = raw_code
+                else:
+                    code = next_subrank(parent_code)
+        visiting.remove(taxon)
+        rank_code_cache[taxon] = code
+        return code
+
+    return {taxon: rank_code(taxon) for taxon in parent}
+
 
 def build_nodes(nodes_path, names):
-    major_letters = ['U','R','D','K','P','C','O','F','G','S']
-    major_order   = {'U':0,'R':1,'D':2,'K':3,'P':4,'C':5,'O':6,'F':7,'G':8,'S':9}
-    major_rank_to_code = {
-        "root":"R",
-        "acellular root":"R",
-        "cellular root":"R",
-        "no rank":"NR",
-        "clade":"C",
-        "subfamily":"F",
-        "domain":"D",
-        "realm":"D",
-        "kingdom":"K",
-        "phylum":"P",
-        "class":"C",
-        "order":"O",
-        "family":"F",
-        "genus":"G",
-        "species":"S",
-    }
-    
     nodes = pd.read_csv(
         nodes_path, sep="|", header=None, usecols=[0,1,2],
-        names=["taxid","parent","rank"], dtype={"taxid":int,"parent":int,"rank":str},
+        names=["taxon","parent","rank"], dtype={"taxon":int,"parent":int,"rank":str},
         engine="python"
     )
     nodes["rank"] = nodes["rank"].str.strip().str.lower()
-    # nodes["name"] = nodes["taxid"].map(names)
-    nodes.loc[nodes["taxid"]==1, "parent"]
-    parent = dict(zip(nodes["taxid"], nodes["parent"]))
-    rank_map = dict(zip(nodes["taxid"], nodes["rank"]))
-    
-    _rank_code_cache = {}
-    def _rank_code(t):
-        if t in _rank_code_cache: return _rank_code_cache[t]
-        if t == 0: _rank_code_cache[t] = "U"; return "U"
-        if t == 1: _rank_code_cache[t] = "R"; return "R"
-        steps, cur = 0, t
-        while True:
-            r = rank_map.get(cur, "")
-            b = major_rank_to_code.get(r)
-            if b:
-                c = b if steps == 0 else f"{b}{steps}"
-                _rank_code_cache[t] = c
-                return c
-            nxt = parent.get(cur)
-            if nxt is None or nxt == cur: _rank_code_cache[t] = None; return None
-            cur = nxt
-            steps += 1
+    parent = dict(zip(nodes["taxon"], nodes["parent"]))
+    rank_map = dict(zip(nodes["taxon"], nodes["rank"]))
+    rank_codes = assign_rank_codes(parent, rank_map)
 
-    nodes["rank"] = nodes["taxid"].apply(
-        lambda t: correct_rank(t, rank_map, parent, set())
-    )
-    nodes["rank_code"] = nodes["taxid"].apply(_rank_code)
-    nodes["rank_code"] = nodes["rank_code"]
+    nodes["rank_code"] = nodes["taxon"].map(rank_codes)
     nodes["rank_base"] = nodes["rank_code"].str[0]
-    nodes["rank_idx"] = nodes["rank_base"].map(major_order)
-
-    for L in major_letters:
-        ti = major_order[L]
-        nodes[f"higher_than_{L}"] = nodes["rank_idx"] <  ti
+    nodes["rank_idx"] = nodes["rank_base"].map(RANK_ORDER)
+    nodes["new_rank"] = nodes["rank_base"].map(CANONICAL_RANK_NAMES)
     
     return nodes
 
-def get_parents(tid, parent_map, higher_than_F):
+def get_parents(taxon, parent_map, rank_idx, rank="F"):
     parents = set()
-    cur_node = tid
+    threshold = RANK_ORDER[_rank_to_code(rank)]
+    cur_node = taxon
     while True:
         cur_node = parent_map.get(cur_node)
         if cur_node is None:
             break
-        if higher_than_F.get(cur_node, True):
+        if rank_idx.get(cur_node, threshold - 1) < threshold:
             break
         parents.add(cur_node)
     return parents
     
-def build_target_taxids(nodes, names, pathogen_json, extra_taxids=(9606,)):
+def build_target_taxa(nodes, names, pathogen_json):
     with open(pathogen_json) as f:
         pdict = json.load(f)
-    pathogen_taxids = {int(v) for v in pdict["pathogens"].values()}
+    pathogen_taxa = {int(v) for v in pdict["pathogens"].values()}
 
-    parent = dict(zip(nodes["taxid"], nodes["parent"]))
-    parent[1] = None
+    parent = build_parent(nodes)
     tree = defaultdict(list)
     for k, v in parent.items():
         if v is not None and not (isinstance(v, float) and np.isnan(v)):
             tree[int(v)].append(int(k))
-    rank = dict(zip(nodes["taxid"], nodes["rank"]))
-    higher_than_F = dict(zip(nodes["taxid"], nodes["higher_than_F"]))
+    rank = dict(zip(nodes["taxon"], nodes["rank_code"]))
+    rank_idx = dict(zip(nodes["taxon"], nodes["rank_idx"]))
     
-    taxids = set()
-    for tid in pathogen_taxids:
-        taxids.update(get_subtree(tid, tree))
-        taxids.update(get_parents(tid, parent, higher_than_F))
+    taxa = set()
+    for taxon in pathogen_taxa:
+        taxa.update(get_subtree(taxon, tree))
+        taxa.update(get_parents(taxon, parent, rank_idx, rank="F"))
 
-    if extra_taxids:
-        taxids.update(extra_taxids)
-    return taxonomic_order(taxids, parent, rank, names)
+    return taxonomic_order(taxa, parent, rank, names)
 
 def get_lca(a, b, parent_dict):
     if a == b:
