@@ -2,6 +2,14 @@
 
 Utilities for working with NCBI taxonomic data, accession-to-taxon mappings, taxonomy branches, corrected ranks, and pathogen target taxa.
 
+# Install
+
+### Conda Formula
+conda install bioconda::taxutils
+
+### Pip Formula
+pip install taxutils
+
 # Setup
 
 `taxutils` stores downloaded taxonomy files (`names.dmp`, `nodes.dmp`), pathogen target metadata, and accession-to-taxon mappings in a global save directory. Set `TAXUTILS_GLOBALS` before importing the package if you want to control where these files live:
