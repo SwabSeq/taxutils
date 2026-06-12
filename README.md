@@ -50,6 +50,7 @@ tu.get_branch(taxon)
 tu.get_subtree(taxon)
 tu.get_lca(taxon_a, taxon_b)
 tu.sort_taxa(taxa)
+tu.format_tree(taxa, include_ancestors=True, root=1, indent="\t")
 
 # Rank utilities
 tu.get_rank_order()

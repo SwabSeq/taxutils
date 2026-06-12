@@ -139,6 +139,32 @@ class TaxonomicUtils:
         rank = dict(zip(self.nodes["taxon"], self.nodes["rank_code"]))
         return taxonomic_order(present, self.parent, rank, self.names)
 
+    def format_tree(self, taxa, include_ancestors: bool = True, root: int = 1, indent: str = "\t"):
+        """Return an indented taxonomic tree as a Series indexed by taxon."""
+        taxa = set(_as_taxa_list(taxa))
+        tree_taxa = set()
+
+        if include_ancestors:
+            for taxon in taxa:
+                cur = int(taxon)
+                seen = set()
+                while cur is not None and cur not in seen:
+                    tree_taxa.add(cur)
+                    if cur == root:
+                        break
+                    seen.add(cur)
+                    cur = self.parent.get(cur)
+        else:
+            tree_taxa = set(taxa)
+
+        order = self.sort_taxa(tree_taxa)
+        depth = _tree_depth(order, self.parent, root=root)
+        names = {
+            taxon: f"{indent * depth.get(taxon, 0)}{self.names.get(taxon, str(taxon))}"
+            for taxon in order
+        }
+        return pd.Series(names, name="name").rename_axis("taxon")
+
     def get_lca(self, a, b):
         """Return the lowest common ancestor taxon for two taxa."""
         return get_lca(int(a), int(b), self.parent)
@@ -276,6 +302,27 @@ def _as_string_list(strings):
     else:
         values = list(strings)
     return [str(value) for value in values if not pd.isna(value)]
+
+
+def _tree_depth(order, parent, root=1):
+    visible = set(order)
+    depth = {}
+    for taxon in order:
+        chain = []
+        cur = int(taxon)
+        seen = set()
+        while cur is not None and cur not in seen:
+            chain.append(cur)
+            if cur == root:
+                break
+            seen.add(cur)
+            cur = parent.get(cur)
+
+        visible_ancestors = [node for node in chain[::-1] if node in visible]
+        for idx, node in enumerate(visible_ancestors):
+            depth.setdefault(node, idx)
+
+    return depth
 
 
 def parse_accession(strings, version: bool = True):

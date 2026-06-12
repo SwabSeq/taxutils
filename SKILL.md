@@ -7,7 +7,7 @@ description: Use this skill when working with the Python taxutils package for NC
 
 ## Public entry point
 
-Use only the package constructor from the top-level package:
+Use the package constructor from the top-level package:
 
 ```python
 from taxutils import taxutils
@@ -17,7 +17,7 @@ tu = taxutils(low_memory=False)
 
 ## Setup
 
-Check first that the user specified the env variable $TAXUTILS_GLOBALS. Recommend that the user export the variable in their zshrc/basrc first. You should only ever use one `TAXUTILS_GLOBALS` folder, do not specify os.environ unless you are absolutely sure the user wants you to set a new location like this:
+Use `TAXUTILS_GLOBALS` to control where taxutils stores downloaded taxonomy files, target metadata, accession maps, and the optional SQLite database. Recommend that users export one consistent `TAXUTILS_GLOBALS` folder in their shell config. For a temporary script or notebook, set `os.environ` before importing taxutils:
 
 ```python
 import os
@@ -27,7 +27,7 @@ from taxutils import taxutils
 tu = taxutils()
 ```
 
-Default mode is low-memory, but recommend the user build the SQLite database.
+Default mode is low-memory and scans the compressed accession map when needed:
 
 ```python
 tu = taxutils()
@@ -39,7 +39,7 @@ For faster repeated accession lookups, build/reuse the SQLite database:
 tu = taxutils(low_memory=False)
 ```
 
-To force fresh managed resource files and rebuild the accession SQLite database:
+To refresh managed resource files and rebuild the accession SQLite database:
 
 ```python
 tu = taxutils(rebuild=True)
@@ -112,6 +112,7 @@ branch = tu.get_branch(taxon)      # root-to-taxon branch
 subtree = tu.get_subtree(taxon)    # taxon plus descendants
 lca = tu.get_lca(taxon_a, taxon_b)
 ordered = tu.sort_taxa(taxa)
+tree = tu.format_tree(taxa)        # Series indexed by taxon with indented names
 ```
 
 When displaying branch rows in branch order:
@@ -127,6 +128,24 @@ To combine branches:
 branch_a = tu.get_branch(taxon_a)
 branch_b = tu.get_branch(taxon_b)
 branch_taxa = tu.sort_taxa(set(branch_a) | set(branch_b))
+```
+
+To format taxa as an indented tree:
+
+```python
+import pandas as pd
+
+taxon_counts = pd.Series({12059: 500, 147711: 120}, name="count")
+tree = tu.format_tree(taxon_counts.index)
+
+report = pd.DataFrame({
+    "count": taxon_counts.reindex(tree.index).fillna(0).astype(int),
+    "name": tree,
+})
+
+with open("example_tree.txt", "w") as f:
+    for taxon, row in report.iterrows():
+        f.write(f"{taxon}\t{row['count']}\t{row['name']}\n")
 ```
 
 ## Rank correction
@@ -176,5 +195,3 @@ Use `set.update(...)` to add many taxa to a set:
 taxa = set(tu.get_branch(taxon))
 taxa.update(tu.get_subtree(other_taxon))
 ```
-
-Do not use `set.add(set(...))`.
