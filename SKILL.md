@@ -54,7 +54,7 @@ The object repr lists available public methods.
 
 ## Accession Parsing
 
-Use `tu.parse_accession` for raw accession strings, FASTA headers, Kraken-style headers, pandas Series, numpy arrays, or lists. Versions are kept by default.
+Use `tu.parse_accession` for raw accession strings, FASTA headers, Kraken-style headers, pandas Series, numpy arrays, or lists. Versions are kept by default. It returns the first accession found from each string using the same container type where possible; missing accessions are returned as `"NA"`.
 
 ```python
 headers = [
@@ -83,7 +83,8 @@ When processing large FASTA files, stream headers in chunks instead of reading t
 ```python
 accessions = {}
 for header in iter_header_lines("input.fasta"):
-    for accession in tu.parse_accession(header):
+    accession = tu.parse_accession(header)
+    if accession != "NA":
         accessions.setdefault(accession, None)
 acc_ids = list(accessions)
 ```
@@ -125,7 +126,8 @@ seen = {}
 with open("input.fasta") as in_f:
     for line in in_f:
         if line.startswith(">"):
-            for accession in tu.parse_accession(line):
+            accession = tu.parse_accession(line)
+            if accession != "NA":
                 seen.setdefault(accession, None)
 
 acc_ids = list(seen)
@@ -141,10 +143,10 @@ with open("taxid_map.tsv", "w") as f:
 To clean FASTA headers to accession-only headers:
 
 ```python
-accessions = tu.parse_accession(header_line)
-if not accessions:
+accession = tu.parse_accession(header_line)
+if accession == "NA":
     raise ValueError(f"No accession found: {header_line.strip()}")
-clean_header = f">{accessions[0]}\n"
+clean_header = f">{accession}\n"
 ```
 
 For in-place FASTA rewrites, write to a temporary file in the same directory and then use `os.replace(tmp_path, input_path)` so partial writes do not corrupt the input.
@@ -160,9 +162,15 @@ lca = tu.get_lca(taxon_a, taxon_b)
 distance = tu.get_distance(taxon_a, taxon_b)
 ordered = tu.sort_taxa(taxa)
 tree = tu.format_tree(taxa)        # Series indexed by taxon with indented names
+profile = tu.topology(taxon)       # Series of subtree topology metrics
+scale = tu.topology(taxon, anchor_rank="F", stat="topology_scale")
 ```
 
 `format_tree(taxa, include_ancestors=True, root=1, indent="\t")` includes ancestors by default and returns a pandas Series named `name`.
+
+`topology(taxon, anchor_rank=None, stat=None)` returns subtree topology metrics including taxon counts, leaf fraction, depth, branchiness, and `topology_scale`. Pass `anchor_rank="F"` to summarize the nearest family ancestor instead of the exact taxon. With `stat=None`, a single taxon returns a pandas Series and a list, array, or pandas Series returns a DataFrame.
+
+Pass `stat` to return one metric. Valid values are `n_taxa`, `n_leaves`, `max_depth`, `mean_depth`, `topology_scale`, `max_children`, `branching_taxa_fraction`, and `top_child_fraction`. A scalar taxon returns a scalar; a list, array, or pandas Series returns a Series indexed by taxon.
 
 For branch rows in branch order:
 
@@ -242,7 +250,7 @@ For a custom target universe, pass `targets_json=` during construction or assign
 
 ## Kraken Read-Level Movement Analysis
 
-For Kraken read-level classification output, use `taxutils(low_memory=False)`, parse the accession column in one batch, and use the package target set directly:
+For Kraken read-level classification output, use `taxutils(low_memory=False)`, parse the accession column directly, and use the package target set:
 
 ```python
 from taxutils import taxutils

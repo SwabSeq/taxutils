@@ -23,31 +23,32 @@ def parse_args():
         default=None,
         help="Path to output FASTA file. Defaults to overwriting the input file.",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print FASTA headers where no accession is found.",
+    )
     return parser.parse_args()
 
 
-def first_accessions(headers, line_numbers, tu):
+def first_accessions(headers, line_numbers, tu, verbose=False):
     accessions = tu.parse_accession(headers)
-    if len(accessions) == len(headers):
-        return accessions
-
-    first = []
-    for header, line_number in zip(headers, line_numbers):
-        accessions = tu.parse_accession(header)
-        if not accessions:
+    for accession, header, line_number in zip(accessions, headers, line_numbers):
+        if accession == "NA":
+            if verbose:
+                print(f"NA accession line {line_number}: {header.strip()}")
             raise ValueError(f"No accession found in FASTA header on line {line_number}: {header.strip()}")
-        first.append(accessions[0])
-    return first
+    return accessions
 
 
-def write_buffer(out_f, lines, header_positions, header_lines, header_line_numbers, tu):
-    accessions = first_accessions(header_lines, header_line_numbers, tu)
+def write_buffer(out_f, lines, header_positions, header_lines, header_line_numbers, tu, verbose=False):
+    accessions = first_accessions(header_lines, header_line_numbers, tu, verbose=verbose)
     for position, accession in zip(header_positions, accessions):
         lines[position] = f">{accession}\n"
     out_f.writelines(lines)
 
 
-def write_clean_fasta(input_path, output_path, tu):
+def write_clean_fasta(input_path, output_path, tu, verbose=False):
     lines = []
     header_positions = []
     header_lines = []
@@ -57,7 +58,15 @@ def write_clean_fasta(input_path, output_path, tu):
     def flush(out_f):
         nonlocal lines, header_positions, header_lines, header_line_numbers, buffer_size
         if lines:
-            write_buffer(out_f, lines, header_positions, header_lines, header_line_numbers, tu)
+            write_buffer(
+                out_f,
+                lines,
+                header_positions,
+                header_lines,
+                header_line_numbers,
+                tu,
+                verbose=verbose,
+            )
             lines = []
             header_positions = []
             header_lines = []
@@ -77,12 +86,12 @@ def write_clean_fasta(input_path, output_path, tu):
         flush(out_f)
 
 
-def overwrite_clean_fasta(input_path, tu):
+def overwrite_clean_fasta(input_path, tu, verbose=False):
     input_dir = os.path.dirname(os.path.abspath(input_path))
     fd, tmp_path = tempfile.mkstemp(prefix=".clean.", suffix=".fasta", dir=input_dir)
     os.close(fd)
     try:
-        write_clean_fasta(input_path, tmp_path, tu)
+        write_clean_fasta(input_path, tmp_path, tu, verbose=verbose)
         os.replace(tmp_path, input_path)
     finally:
         if os.path.exists(tmp_path):
@@ -90,18 +99,18 @@ def overwrite_clean_fasta(input_path, tu):
     return input_path
 
 
-def clean_fasta_headers(input_path, output_path=None):
+def clean_fasta_headers(input_path, output_path=None, verbose=False):
     tu = taxutils()
     if output_path is None or os.path.abspath(output_path) == os.path.abspath(input_path):
-        return overwrite_clean_fasta(input_path, tu)
+        return overwrite_clean_fasta(input_path, tu, verbose=verbose)
 
-    write_clean_fasta(input_path, output_path, tu)
+    write_clean_fasta(input_path, output_path, tu, verbose=verbose)
     return output_path
 
 
 def main():
     args = parse_args()
-    clean_fasta_headers(args.input, args.output)
+    clean_fasta_headers(args.input, args.output, verbose=args.verbose)
 
 
 if __name__ == "__main__":

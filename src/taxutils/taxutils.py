@@ -43,6 +43,10 @@ class TaxonomicUtils:
     def __post_init__(self):
         if self.parent is None:
             self.parent = build_parent(self.nodes)
+        self.parent = {
+            int(taxon): None if pd.isna(parent) else int(parent)
+            for taxon, parent in self.parent.items()
+        }
         self._tree = None
         self._depth = {}
         self._a2t_checked = False
@@ -80,7 +84,7 @@ class TaxonomicUtils:
             existing = dict(self.a2t or {})
             accessions = sorted({
                 accession
-                for accession in parse_accession(accessions, version=True)
+                for accession in _accessions_for_lookup(accessions)
                 if accession not in existing
             })
             if not accessions:
@@ -153,6 +157,222 @@ class TaxonomicUtils:
             for child in self._tree[taxon]:
                 result.extend(get_subtree(child, self._tree))
         return result
+
+    def _ancestor_at_rank(self, taxon, rank, rank_base=None):
+        rank_code = _rank_to_code(rank)
+        if rank_base is None:
+            rank_base = dict(zip(self.nodes["taxon"], self.nodes["rank_base"]))
+        anchor = int(taxon)
+        for branch_taxon in reversed(self.get_branch(taxon)):
+            if rank_base.get(branch_taxon) == rank_code:
+                return branch_taxon
+        return anchor
+
+    def topology(self, taxon, anchor_rank=None, stat=None):
+        """Return subtree topology metrics or a single topology statistic."""
+        stat = None if stat in (None, "") else str(stat)
+        rank_code_map = (
+            dict(zip(self.nodes["taxon"], self.nodes["rank_code"]))
+            if stat is None
+            else None
+        )
+        rank_base = (
+            dict(zip(self.nodes["taxon"], self.nodes["rank_base"]))
+            if anchor_rank is not None
+            else None
+        )
+        needs_subtree_set = stat is None or stat in {
+            "n_leaves",
+            "max_children",
+            "branching_taxa_fraction",
+            "top_child_fraction",
+        }
+
+        if not np.isscalar(taxon):
+            taxa = _as_taxa_list(taxon)
+            context_cache = {} if anchor_rank is not None else None
+            if stat is not None:
+                values = []
+                for value in taxa:
+                    context = self._topology_context(
+                        value,
+                        anchor_rank=anchor_rank,
+                        rank_base=rank_base,
+                        needs_subtree_set=needs_subtree_set,
+                        context_cache=context_cache,
+                    )
+                    values.append(self._topology_stat_value(context, stat))
+                return pd.Series(values, index=taxa, name=stat).rename_axis("taxon")
+
+            rows = []
+            for value in taxa:
+                context = self._topology_context(
+                    value,
+                    anchor_rank=anchor_rank,
+                    rank_base=rank_base,
+                    needs_subtree_set=needs_subtree_set,
+                    context_cache=context_cache,
+                )
+                rows.append(self._topology_profile_from_context(
+                    context,
+                    rank_code_map=rank_code_map,
+                ))
+            return pd.DataFrame(rows)
+
+        context = self._topology_context(
+            taxon,
+            anchor_rank=anchor_rank,
+            rank_base=rank_base,
+            needs_subtree_set=needs_subtree_set,
+        )
+        if stat is not None:
+            return self._topology_stat_value(context, stat)
+        return self._topology_profile_from_context(context, rank_code_map=rank_code_map)
+
+    def _topology_stat_value(self, context, stat):
+        stats = {
+            "n_taxa": self._topology_n_taxa,
+            "n_leaves": self._topology_n_leaves,
+            "max_depth": self._topology_max_depth,
+            "mean_depth": self._topology_mean_depth,
+            "topology_scale": self._topology_scale,
+            "max_children": self._topology_max_children,
+            "branching_taxa_fraction": self._topology_branching_taxa_fraction,
+            "top_child_fraction": self._topology_top_child_fraction,
+        }
+        if stat not in stats:
+            valid = ", ".join(stats)
+            raise ValueError(f"stat must be one of: {valid}")
+        return stats[stat](context)
+
+    def _topology_context(
+        self,
+        taxon,
+        anchor_rank=None,
+        rank_base=None,
+        needs_subtree_set=True,
+        context_cache=None,
+    ):
+        taxon = int(taxon)
+        rank_code = None if anchor_rank is None else _rank_to_code(anchor_rank)
+
+        if self._tree is None:
+            self._load_tree()
+
+        anchor = taxon if rank_code is None else self._ancestor_at_rank(
+            taxon,
+            rank_code,
+            rank_base,
+        )
+        if context_cache is not None and anchor in context_cache:
+            context = context_cache[anchor]
+            context["taxon"] = taxon
+            return context
+
+        subtree = [int(node) for node in self.get_subtree(anchor)]
+        context = {
+            "taxon": taxon,
+            "anchor": anchor,
+            "subtree": subtree,
+        }
+        if needs_subtree_set:
+            context["subtree_set"] = set(subtree)
+        if context_cache is not None:
+            context_cache[anchor] = context
+        return context
+
+    def _topology_relative_depths(self, context):
+        if "relative_depths" in context:
+            return context["relative_depths"]
+        anchor_depth = self._get_depth(context["anchor"])
+        context["relative_depths"] = [
+            max(self._get_depth(node) - anchor_depth, 0)
+            for node in context["subtree"]
+        ]
+        return context["relative_depths"]
+
+    def _topology_child_counts(self, context):
+        if "child_counts" in context:
+            return context["child_counts"]
+        subtree_set = context.setdefault("subtree_set", set(context["subtree"]))
+        context["child_counts"] = [
+            sum(child in subtree_set for child in self._tree.get(node, []))
+            for node in context["subtree"]
+        ]
+        return context["child_counts"]
+
+    def _topology_n_taxa(self, context):
+        return len(context["subtree"])
+
+    def _topology_n_leaves(self, context):
+        return sum(count == 0 for count in self._topology_child_counts(context))
+
+    def _topology_max_depth(self, context):
+        relative_depths = self._topology_relative_depths(context)
+        return max(relative_depths) if relative_depths else 0
+
+    def _topology_mean_depth(self, context):
+        relative_depths = self._topology_relative_depths(context)
+        return float(np.mean(relative_depths)) if relative_depths else 0
+
+    def _topology_scale(self, context):
+        relative_depths = self._topology_relative_depths(context)
+        descendant_depths = sorted(depth for depth in relative_depths if depth > 0)
+        p95_depth = (
+            descendant_depths[int(0.95 * (len(descendant_depths) - 1))]
+            if descendant_depths
+            else 0
+        )
+        return max(p95_depth, 1)
+
+    def _topology_max_children(self, context):
+        child_counts = self._topology_child_counts(context)
+        return max(child_counts) if child_counts else 0
+
+    def _topology_branching_taxa_fraction(self, context):
+        n_taxa = self._topology_n_taxa(context)
+        if not n_taxa:
+            return 0
+        child_counts = self._topology_child_counts(context)
+        return sum(count > 0 for count in child_counts) / n_taxa
+
+    def _topology_top_child_fraction(self, context):
+        subtree_set = context["subtree_set"]
+        subtree_sizes = {}
+        for node in reversed(context["subtree"]):
+            subtree_sizes[node] = 1 + sum(
+                subtree_sizes[child]
+                for child in self._tree.get(node, [])
+                if child in subtree_set
+            )
+
+        immediate_children = [
+            child for child in self._tree.get(context["anchor"], []) if child in subtree_set
+        ]
+        immediate_child_sizes = [subtree_sizes[child] for child in immediate_children]
+        total_child_size = sum(immediate_child_sizes)
+        return max(immediate_child_sizes) / total_child_size if total_child_size else 1
+
+    def _topology_profile_from_context(self, context, rank_code_map):
+        taxon = context["taxon"]
+        anchor = context["anchor"]
+        profile = pd.Series({
+            "taxon": taxon,
+            "name": self.names.get(taxon, str(taxon)),
+            "rank_code": rank_code_map.get(taxon),
+            "anchor_taxon": anchor,
+            "anchor_name": self.names.get(anchor, str(anchor)),
+            "anchor_rank_code": rank_code_map.get(anchor),
+            "n_taxa": self._topology_n_taxa(context),
+            "n_leaves": self._topology_n_leaves(context),
+            "max_depth": self._topology_max_depth(context),
+            "mean_depth": self._topology_mean_depth(context),
+            "topology_scale": self._topology_scale(context),
+            "max_children": self._topology_max_children(context),
+            "branching_taxa_fraction": self._topology_branching_taxa_fraction(context),
+            "top_child_fraction": self._topology_top_child_fraction(context),
+        }, dtype=object)
+        return profile
 
     def sort_taxa(self, taxa):
         """Return unique taxa sorted in taxonomic order."""
@@ -240,7 +460,7 @@ def download_taxonomy(
     if rebuild or not (os.path.exists(names_path) and os.path.exists(nodes_path)):
         logger.info(f"Downloading {names_path}, {nodes_path}...")
         tarball_path = os.path.join(save_path, "taxdump.tar.gz")
-        url = "https://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz"
+        url = taxdump.tar.gz
         _download_file(url, tarball_path)
 
         with tarfile.open(tarball_path, "r:gz") as tar:
@@ -360,16 +580,46 @@ def _tree_depth(order, parent, root=1):
 
 
 def parse_accession(strings, version: bool = True):
-    """Return accession IDs parsed from strings."""
-    accessions = []
-    for text in _as_string_list(strings):
-        for match in ACCESSION_PATTERN.finditer(text.upper()):
-            accession = match.group(1)
-            accession_version = match.group(2)
-            if version and accession_version is not None:
-                accession = f"{accession}.{accession_version}"
-            accessions.append(accession)
-    return accessions
+    """Return the first accession parsed from each string, preserving input type."""
+    def parse_text(text):
+        if pd.isna(text):
+            return "NA"
+        match = ACCESSION_PATTERN.search(str(text).upper())
+        if match is None:
+            return "NA"
+        accession = match.group(1)
+        accession_version = match.group(2)
+        if version and accession_version is not None:
+            accession = f"{accession}.{accession_version}"
+        return accession
+
+    if strings is None or isinstance(strings, str):
+        return parse_text(strings)
+
+    if isinstance(strings, pd.Series):
+        return strings.map(parse_text)
+
+    if isinstance(strings, np.ndarray):
+        values = strings.astype(object)
+        return np.vectorize(parse_text, otypes=[object])(values)
+
+    if np.isscalar(strings):
+        return parse_text(strings)
+
+    return [parse_text(text) for text in strings]
+
+
+def _accessions_for_lookup(accessions):
+    parsed = parse_accession(accessions, version=True)
+    if isinstance(parsed, str):
+        values = [parsed]
+    elif isinstance(parsed, pd.Series):
+        values = parsed.tolist()
+    elif isinstance(parsed, np.ndarray):
+        values = parsed.ravel().tolist()
+    else:
+        values = list(parsed)
+    return [accession for accession in values if accession != "NA" and not pd.isna(accession)]
 
 
 def _rank_to_code(rank):
@@ -436,7 +686,7 @@ def download_a2t(verbose=True, rebuild=False):
     return gz_path
 
 def build_a2t(accessions, low_memory=True, verbose=True):
-    accessions = parse_accession(accessions, version=True)
+    accessions = _accessions_for_lookup(accessions)
 
     if low_memory:
         gz_path = download_a2t(verbose=verbose)
@@ -565,10 +815,13 @@ def build_names(names_path):
 
 def get_subtree(taxon, tree):
     """Return all descendant taxa for a taxon from a parent-to-children tree."""
-    result = [taxon]
-    if taxon in tree:
-        for child in tree[taxon]:
-            result.extend(get_subtree(child, tree))
+    result = []
+    stack = [taxon]
+    while stack:
+        node = stack.pop()
+        result.append(node)
+        children = tree.get(node, [])
+        stack.extend(reversed(children))
     return result
 
 

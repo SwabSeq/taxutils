@@ -38,29 +38,56 @@ Core functions are listed here. See the example notebook for a fuller walkthroug
 
 ```python
 # Build object
-tu = taxutils(accessions=None, low_memory=True, targets_json=None, rebuild=False)
+tu = taxutils(accessions=None, low_memory=True, targets_json=None, rebuild=False)  # Build the taxonomy utility object.
 
 # Accession parsing and mapping
-tu.parse_accession(header_strings, version=True)
-tu.load_a2t(accessions, low_memory=None, extend=False)
-tu.get_t2a(taxa, low_memory=None)
+tu.parse_accession(header_strings, version=True)          # Extract one accession per string.
+tu.load_a2t(accessions, low_memory=None, extend=False)    # Load accession-to-taxon mappings into tu.a2t.
+tu.get_t2a(taxa, low_memory=None)                         # Return accessions assigned to taxa.
 
 # Tree queries
-tu.get_branch(taxon)
-tu.get_subtree(taxon)
-tu.get_lca(taxon_a, taxon_b)
-tu.get_distance(taxon_a, taxon_b)
-tu.sort_taxa(taxa)
-tu.format_tree(taxa, include_ancestors=True, root=1, indent="\t")
+tu.get_branch(taxon)                                      # Return the root-to-taxon branch.
+tu.get_subtree(taxon)                                     # Return taxon plus all descendants.
+tu.get_lca(taxon_a, taxon_b)                              # Return the lowest common ancestor.
+tu.get_distance(taxon_a, taxon_b)                         # Return tree edge distance through the LCA.
+tu.sort_taxa(taxa)                                        # Sort taxa in taxonomic order.
+tu.format_tree(taxa)                                      # Return an indented tree Series.
+tu.topology(taxon, anchor_rank=None)                      # Return subtree topology metrics.
+tu.topology(taxon, anchor_rank=None, stat="topology_scale")  # Return one topology statistic.
 
 # Rank utilities
-tu.get_rank_order()
-tu.higher_than_rank(taxa, rank)
+tu.get_rank_order()                                       # Return canonical rank codes.
+tu.higher_than_rank(taxa, rank)                           # Test whether taxa are higher than a rank.
 ```
 
 In taxutils, `accessions=list/of/accessions` can be passed to call load_a2t on construction of the taxutils object. A custom targets_json can similarly be passed in lieu of the default json explained below. `rebuild=True` redownloads the managed taxonomy, target, and accession files and rebuilds the SQLite accession database. `load_a2t` overwrites `tu.a2t` by default; pass `extend=True` to add missing mappings without discarding existing ones. Method-level `low_memory=None` uses the mode set when `tu` was built.
 
+`parse_accession` accepts strings, lists, arrays, and pandas Series. It returns the first accession found from each string using the same container type where possible; missing accessions are returned as `"NA"`.
+
 `get_lca(a, b)` returns the lowest common ancestor of two taxa. `get_distance(a, b)` returns the edge distance between two taxa through their lowest common ancestor. Depths are cached lazily as these methods are called.
+
+`topology(taxon, anchor_rank=None, stat=None)` returns subtree topology metrics such as taxon count, leaf fraction, depth, branchiness, and `topology_scale`. Pass `anchor_rank="F"` to summarize the nearest family-level ancestor. With `stat=None`, a single taxon returns a Series and a list, array, or Series returns a DataFrame.
+
+Pass `stat` to return one topology metric. A single taxon returns a scalar; a list, array, or Series returns a Series indexed by taxon.
+
+## Topology columns
+
+`tu.topology(...)` returns these columns:
+
+- `taxon`: input taxon.
+- `name`: input taxon name.
+- `rank_code`: corrected rank code for the input taxon.
+- `anchor_taxon`: subtree root used for the topology summary.
+- `anchor_name`: anchor taxon name.
+- `anchor_rank_code`: corrected rank code for the anchor.
+- `n_taxa`: number of taxa in the anchor subtree.
+- `n_leaves`: number of terminal taxa in the anchor subtree.
+- `max_depth`: maximum number of edges below the anchor.
+- `mean_depth`: average number of edges below the anchor.
+- `topology_scale`: 95th percentile descendant depth, with minimum value 1.
+- `max_children`: largest number of direct children from any node in the subtree.
+- `branching_taxa_fraction`: fraction of subtree taxa with at least one child.
+- `top_child_fraction`: fraction of the anchor subtree contained in its largest immediate child branch.
 
 `tu.target_taxa` contains the default pathogen-derived target taxa. Use it directly for target filtering or movement checks.
 

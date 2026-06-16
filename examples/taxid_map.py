@@ -22,6 +22,11 @@ def parse_args():
         required=True,
         help="Path to output accession-to-taxon map.",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print FASTA headers where no accession is found.",
+    )
     return parser.parse_args()
 
 
@@ -32,7 +37,7 @@ def iter_header_lines(fasta_path):
                 yield line.decode("utf-8", errors="ignore")
 
 
-def extract_accessions(fasta_path, tu):
+def extract_accessions(fasta_path, tu, verbose=False):
     accessions = {}
     headers = []
     headers_size = 0
@@ -40,8 +45,11 @@ def extract_accessions(fasta_path, tu):
     def add_headers():
         nonlocal headers, headers_size
         if headers:
-            for accession in tu.parse_accession(headers):
-                accessions.setdefault(accession, None)
+            for header, accession in zip(headers, tu.parse_accession(headers)):
+                if accession != "NA":
+                    accessions.setdefault(accession, None)
+                elif verbose:
+                    print(f"NA accession: {header.strip()}")
             headers = []
             headers_size = 0
 
@@ -78,16 +86,16 @@ def write_taxid_map(accessions, output_path, tu):
         flush(f)
 
 
-def build_taxid_map(input_path, output_path):
+def build_taxid_map(input_path, output_path, verbose=False):
     tu = taxutils(low_memory=False)
-    accessions = extract_accessions(input_path, tu)
+    accessions = extract_accessions(input_path, tu, verbose=verbose)
     write_taxid_map(accessions, output_path, tu)
     return output_path
 
 
 def main():
     args = parse_args()
-    build_taxid_map(args.input, args.output)
+    build_taxid_map(args.input, args.output, verbose=args.verbose)
 
 
 if __name__ == "__main__":
