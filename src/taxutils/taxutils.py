@@ -460,7 +460,7 @@ def download_taxonomy(
     if rebuild or not (os.path.exists(names_path) and os.path.exists(nodes_path)):
         logger.info(f"Downloading {names_path}, {nodes_path}...")
         tarball_path = os.path.join(save_path, "taxdump.tar.gz")
-        url = taxdump.tar.gz
+        url = "https://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz"
         _download_file(url, tarball_path)
 
         with tarfile.open(tarball_path, "r:gz") as tar:
