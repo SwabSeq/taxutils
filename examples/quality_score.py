@@ -42,19 +42,23 @@ def aggregate_lca_mapping(lca_mapping):
 
 
 def distance_metrics(tu, labeled_taxon, kmer_counts, topology_scale):
-    kmer_counts.pop(0, None)
-    kmer_counts.pop(-1, None)
+    kmer_counts = dict(kmer_counts)
+    total_kmers = sum(kmer_counts.values())
+    unclassified_kmers = kmer_counts.pop(0, 0)
+    masked_kmers = kmer_counts.pop(-1, 0)
     classified_kmer_count = sum(kmer_counts.values())
 
     total_distance_moved = 0
     total_upward_loss = 0
     total_lateral_shift = 0
     distance_sq_sum = 0
+    labeled_taxon_depth = tu._get_depth(labeled_taxon)
 
     for taxon, count in kmer_counts.items():
         lca_taxon = tu.get_lca(labeled_taxon, taxon)
-        upward_loss = tu.get_distance(labeled_taxon, lca_taxon)
-        lateral_shift = tu.get_distance(taxon, lca_taxon)
+        lca_depth = tu._get_depth(lca_taxon)
+        upward_loss = labeled_taxon_depth - lca_depth
+        lateral_shift = tu._get_depth(taxon) - lca_depth
         distance = upward_loss + lateral_shift
 
         total_distance_moved += count * distance
@@ -86,6 +90,10 @@ def distance_metrics(tu, labeled_taxon, kmer_counts, topology_scale):
     )
 
     return {
+        "total_kmers": total_kmers,
+        "unclassified_kmers": unclassified_kmers,
+        "classified_kmers": classified_kmer_count,
+        "masked_kmers": masked_kmers,
         "total_distance_moved": total_distance_moved,
         "average_distance_moved": average_distance_moved,
         "topology_scale": topology_scale,
@@ -119,27 +127,51 @@ def main():
     out = out[out["accession"] != "NA"].copy()
 
     tu.load_a2t(out["accession"].drop_duplicates().tolist())
-    out["labeled_taxon"] = out["accession"].map(tu.a2t)
-    out = out.dropna(subset=["labeled_taxon"]).astype({"labeled_taxon": int})
+    out["taxon"] = out["accession"].map(tu.a2t)
+    out["label_taxon"] = pd.to_numeric(out["predicted_taxid"], errors="coerce")
+    out = out.dropna(subset=["taxon", "label_taxon"]).astype(
+        {"taxon": int, "label_taxon": int}
+    )
+    out = out[out["label_taxon"] > 0].copy()
 
     topology_scales = tu.topology(
-        out["labeled_taxon"].drop_duplicates(),
+        out["label_taxon"].drop_duplicates(),
         anchor_rank="F",
         stat="topology_scale",
     ).to_dict()
 
     rows = []
-    for row in out[["accession", "labeled_taxon", "lca_mapping"]].to_dict("records"):
+    lca_mapping_cache = {}
+    score_columns = ["accession", "taxon", "label_taxon", "seqlen", "lca_mapping"]
+    for row in out[score_columns].to_dict("records"):
+        lca_mapping = row["lca_mapping"]
+        if lca_mapping not in lca_mapping_cache:
+            lca_mapping_cache[lca_mapping] = aggregate_lca_mapping(lca_mapping)
         metrics = distance_metrics(
             tu=tu,
-            labeled_taxon=row["labeled_taxon"],
-            kmer_counts=aggregate_lca_mapping(row["lca_mapping"]),
-            topology_scale=topology_scales[row["labeled_taxon"]],
+            labeled_taxon=row["label_taxon"],
+            kmer_counts=lca_mapping_cache[lca_mapping],
+            topology_scale=topology_scales[row["label_taxon"]],
         )
-        rows.append({"accession": row["accession"], **metrics})
+        rows.append(
+            {
+                "accession": row["accession"],
+                "taxon": row["taxon"],
+                "label_taxon": row["label_taxon"],
+                "seq_len": row["seqlen"],
+                **metrics,
+            }
+        )
 
     results = pd.DataFrame.from_records(rows)[[
         "accession",
+        "taxon",
+        "label_taxon",
+        "seq_len",
+        "total_kmers",
+        "unclassified_kmers",
+        "classified_kmers",
+        "masked_kmers",
         "total_distance_moved",
         "average_distance_moved",
         "topology_scale",

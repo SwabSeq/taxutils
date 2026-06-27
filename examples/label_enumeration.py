@@ -21,9 +21,9 @@ def parse_args():
         help="Path to write enumerated Kraken-compatible output.",
     )
     parser.add_argument(
-        "--include-original",
+        "--exclude-original",
         action="store_true",
-        help="Also keep the original Kraken predicted taxid row.",
+        help="Only write enumerated candidate-label rows.",
     )
     parser.add_argument(
         "--min-count",
@@ -51,7 +51,7 @@ def candidate_taxa(lca_mapping, min_count=1):
     return taxa
 
 
-def enumerate_labels(df, include_original=False, min_count=1):
+def enumerate_labels(df, include_original=True, min_count=1):
     rows = []
     for row in df.to_dict("records"):
         if include_original:
@@ -75,7 +75,7 @@ def main():
     )
     enumerated = enumerate_labels(
         df,
-        include_original=args.include_original,
+        include_original=not args.exclude_original,
         min_count=args.min_count,
     )
 
