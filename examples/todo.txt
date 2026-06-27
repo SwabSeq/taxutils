@@ -1,0 +1,19 @@
+Building:
+- Download latest refseq viral
+- (S) Download latest Kraken2 standard db
+- (V.fa) Download latest NT viral
+- (V) Build new Kraken2 standard + NT viral
+- Classify V.fa with S --> Vfa_with_S.kraken
+- Run quality_score.py on Vfa_with_S.kraken
+    - A.fa <-- Save accessions with normalized total distance == 0, grep from V.fa
+- (A) Build Kraken2 db with standard + A.fa
+- Classify V.fa with A --> Vfa_with_A.kraken
+- Vfa_with_A_enumerated.kraken <-- Run label_enumeration.py on Vfa_with_A.kraken
+- Run quality_score.py on Vfa_with_A_enumerated.kraken
+    - For each accession, keep the row with lowest normalized total distance (For tie-breakers, keep original label)
+    - B.fa <-- See how many accessions are now normalized total distance == 0. If not that many, determine cut off. Save accessions and grep from V.fa. 
+    - Create new seqid2taxid.map with new labels. Make sure to preserve kraken2 header syntax (build_seqid2taxid.py)
+- (B) Build kraken2 db with standard + B.fa and new seqid2taxid.map. Make sure kraken2 is using your map, not creating a new one.
+
+Scoring:
+With each S, V, A, B --> classify V.fa. Count number of unclassified (0) in each lca_mapping. For V, A, B: In lca_mapping from S, the map will tell us exactly which kmers moved. Sum the total distance between S's mapping and [V, A, B] mapping, excluding/skipping past 0s.
