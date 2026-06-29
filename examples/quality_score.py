@@ -118,22 +118,12 @@ def main():
         names=["status", "accession", "predicted_taxid", "seqlen", "lca_mapping"],
     )
 
-    parsed_accessions = tu.parse_accession(out["accession"])
-    if args.verbose:
-        for value in out.loc[parsed_accessions == "NA", "accession"]:
-            print(f"NA accession: {value}")
-
-    out["accession"] = parsed_accessions
-    out = out[out["accession"] != "NA"].copy()
-
     tu.load_a2t(out["accession"].drop_duplicates().tolist())
-    out["taxon"] = out["accession"].map(tu.a2t)
-    out["label_taxon"] = pd.to_numeric(out["predicted_taxid"], errors="coerce")
-    out = out.dropna(subset=["taxon", "label_taxon"]).astype(
-        {"taxon": int, "label_taxon": int}
-    )
-    out = out[out["label_taxon"] > 0].copy()
-
+    out["label_taxon"] = pd.to_numeric(out["accession"].map(tu.a2t))
+    out.dropna(inplace=True)
+    
+    out = out.astype({"label_taxon": int})
+    
     topology_scales = tu.topology(
         out["label_taxon"].drop_duplicates(),
         anchor_rank="F",
@@ -142,7 +132,7 @@ def main():
 
     rows = []
     lca_mapping_cache = {}
-    score_columns = ["accession", "taxon", "label_taxon", "seqlen", "lca_mapping"]
+    score_columns = ["accession", "label_taxon", "seqlen", "lca_mapping"]
     for row in out[score_columns].to_dict("records"):
         lca_mapping = row["lca_mapping"]
         if lca_mapping not in lca_mapping_cache:
@@ -156,7 +146,6 @@ def main():
         rows.append(
             {
                 "accession": row["accession"],
-                "taxon": row["taxon"],
                 "label_taxon": row["label_taxon"],
                 "seq_len": row["seqlen"],
                 **metrics,
@@ -165,7 +154,6 @@ def main():
 
     results = pd.DataFrame.from_records(rows)[[
         "accession",
-        "taxon",
         "label_taxon",
         "seq_len",
         "total_kmers",

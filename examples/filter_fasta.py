@@ -6,7 +6,7 @@ from taxutils import taxutils
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Remove records from a FASTA using accession-to-taxid lookup."
+        description="Filter records from a FASTA using accession-to-taxid lookup."
     )
     parser.add_argument(
         "-i",
@@ -20,9 +20,16 @@ def parse_args():
         required=True,
         help="Path to write filtered FASTA.",
     )
-    parser.add_argument(
+    taxa_group = parser.add_mutually_exclusive_group(required=True)
+    taxa_group.add_argument(
+        "--keep-taxids",
+        help=(
+            "Taxid or taxa to keep. Pass a single taxid, comma-separated taxids, "
+            "or a text file containing taxids."
+        ),
+    )
+    taxa_group.add_argument(
         "--remove-taxids",
-        required=True,
         help=(
             "Taxid or taxa to remove. Pass a single taxid, comma-separated taxids, "
             "or a text file containing taxids."
@@ -42,7 +49,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def parse_taxa_to_remove(value):
+def parse_taxa(value, option_name):
     if os.path.exists(value):
         with open(value) as f:
             text = f.read()
@@ -54,12 +61,20 @@ def parse_taxa_to_remove(value):
         try:
             taxa.add(int(token))
         except ValueError as exc:
-            raise ValueError(f"Invalid taxid in --remove-taxids: {token}") from exc
+            raise ValueError(f"Invalid taxid in {option_name}: {token}") from exc
 
     if not taxa:
-        raise ValueError("--remove-taxids did not contain any taxids")
+        raise ValueError(f"{option_name} did not contain any taxids")
 
     return taxa
+
+
+def parse_taxa_to_remove(value):
+    return parse_taxa(value, "--remove-taxids")
+
+
+def parse_taxa_to_keep(value):
+    return parse_taxa(value, "--keep-taxids")
 
 
 def iter_fasta_records(fasta_path):
@@ -78,7 +93,7 @@ def iter_fasta_records(fasta_path):
             yield header, sequence
 
 
-def flush_records(out_f, records, tu, remove_taxa, verbose=False):
+def flush_records(out_f, records, tu, filter_taxa, filter_mode="remove", verbose=False):
     headers = [header for header, _ in records]
     accessions = tu.parse_accession(headers)
     lookup_accessions = sorted({
@@ -98,6 +113,9 @@ def flush_records(out_f, records, tu, remove_taxa, verbose=False):
             missing_accession += 1
             if verbose:
                 print(f"No accession found: {header.strip()}")
+            if filter_mode == "keep":
+                removed += 1
+                continue
             lines.append(header)
             lines.extend(sequence)
             kept += 1
@@ -108,12 +126,19 @@ def flush_records(out_f, records, tu, remove_taxa, verbose=False):
             missing_taxid += 1
             if verbose:
                 print(f"No taxid found for {accession}: {header.strip()}")
+            if filter_mode == "keep":
+                removed += 1
+                continue
             lines.append(header)
             lines.extend(sequence)
             kept += 1
             continue
 
-        if int(taxid) in remove_taxa:
+        taxid = int(taxid)
+        if filter_mode == "remove" and taxid in filter_taxa:
+            removed += 1
+            continue
+        if filter_mode == "keep" and taxid not in filter_taxa:
             removed += 1
             continue
 
@@ -125,7 +150,17 @@ def flush_records(out_f, records, tu, remove_taxa, verbose=False):
     return kept, removed, missing_accession, missing_taxid
 
 
-def filter_fasta(input_path, output_path, remove_taxa, batch_size=5000, verbose=False):
+def filter_fasta(
+    input_path,
+    output_path,
+    filter_taxa,
+    filter_mode="remove",
+    batch_size=5000,
+    verbose=False,
+):
+    if filter_mode not in {"keep", "remove"}:
+        raise ValueError("filter_mode must be 'keep' or 'remove'")
+
     tu = taxutils(low_memory=False)
     output_dir = os.path.dirname(output_path)
     if output_dir:
@@ -147,7 +182,8 @@ def filter_fasta(input_path, output_path, remove_taxa, batch_size=5000, verbose=
                     out_f,
                     records,
                     tu,
-                    remove_taxa,
+                    filter_taxa,
+                    filter_mode=filter_mode,
                     verbose=verbose,
                 )
                 totals["kept"] += kept
@@ -161,7 +197,8 @@ def filter_fasta(input_path, output_path, remove_taxa, batch_size=5000, verbose=
                 out_f,
                 records,
                 tu,
-                remove_taxa,
+                filter_taxa,
+                filter_mode=filter_mode,
                 verbose=verbose,
             )
             totals["kept"] += kept
@@ -174,11 +211,18 @@ def filter_fasta(input_path, output_path, remove_taxa, batch_size=5000, verbose=
 
 def main():
     args = parse_args()
-    remove_taxa = parse_taxa_to_remove(args.remove_taxids)
+    if args.keep_taxids:
+        filter_taxa = parse_taxa_to_keep(args.keep_taxids)
+        filter_mode = "keep"
+    else:
+        filter_taxa = parse_taxa_to_remove(args.remove_taxids)
+        filter_mode = "remove"
+
     totals = filter_fasta(
         args.input,
         args.output,
-        remove_taxa=remove_taxa,
+        filter_taxa=filter_taxa,
+        filter_mode=filter_mode,
         batch_size=args.batch_size,
         verbose=args.verbose,
     )
