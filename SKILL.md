@@ -158,6 +158,7 @@ Use these public methods:
 ```python
 branch = tu.get_branch(taxon)      # root-to-taxon branch
 subtree = tu.get_subtree(taxon)    # taxon plus descendants
+leaf = tu.is_leaf(taxon)           # True if taxon has no child nodes
 lca = tu.get_lca(taxon_a, taxon_b)
 distance = tu.get_distance(taxon_a, taxon_b)
 ordered = tu.sort_taxa(taxa)
@@ -167,6 +168,8 @@ scale = tu.topology(taxon, anchor_rank="F", stat="topology_scale")
 ```
 
 `format_tree(taxa, include_ancestors=True, root=1, indent="\t")` includes ancestors by default and returns a pandas Series named `name`.
+
+`is_leaf(taxon)` returns whether taxa have no children in the taxonomy tree. A scalar taxon returns a `bool`; a list-like input returns a list of booleans; a numpy array returns a boolean array with the original shape; and a pandas Series returns a boolean Series with the original index.
 
 `topology(taxon, anchor_rank=None, stat=None)` returns subtree topology metrics including taxon counts, leaf fraction, depth, branchiness, and `topology_scale`. Pass `anchor_rank="F"` to summarize the nearest family ancestor instead of the exact taxon. With `stat=None`, a single taxon returns a pandas Series and a list, array, or pandas Series returns a DataFrame.
 

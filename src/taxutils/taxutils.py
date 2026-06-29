@@ -158,6 +158,28 @@ class TaxonomicUtils:
                 result.extend(get_subtree(child, self._tree))
         return result
 
+    def is_leaf(self, taxon):
+        """Return whether taxa have no children in the taxonomy tree."""
+        if self._tree is None:
+            self._load_tree()
+
+        def check(value):
+            if pd.isna(value):
+                return False
+            return int(value) not in self._tree
+
+        if isinstance(taxon, pd.Series):
+            return taxon.map(check).astype(bool)
+
+        if isinstance(taxon, np.ndarray):
+            values = taxon.astype(object)
+            return np.vectorize(check, otypes=[bool])(values)
+
+        if np.isscalar(taxon):
+            return check(taxon)
+
+        return [check(value) for value in taxon]
+
     def _ancestor_at_rank(self, taxon, rank, rank_base=None):
         rank_code = _rank_to_code(rank)
         if rank_base is None:
