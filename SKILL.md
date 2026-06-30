@@ -158,7 +158,10 @@ Use these public methods:
 ```python
 branch = tu.get_branch(taxon)      # root-to-taxon branch
 subtree = tu.get_subtree(taxon)    # taxon plus descendants
+family = tu.get_ancestor(taxon, anchor_rank="F")
 leaf = tu.is_leaf(taxon)           # True if taxon has no child nodes
+child = tu.is_child(taxon_a, taxon_b)
+descendent = tu.is_descendent(taxon_a, taxon_b)
 lca = tu.get_lca(taxon_a, taxon_b)
 distance = tu.get_distance(taxon_a, taxon_b)
 ordered = tu.sort_taxa(taxa)
@@ -169,7 +172,15 @@ scale = tu.topology(taxon, anchor_rank="F", stat="topology_scale")
 
 `format_tree(taxa, include_ancestors=True, root=1, indent="\t")` includes ancestors by default and returns a pandas Series named `name`.
 
+`get_ancestor(taxon, anchor_rank)` returns the nearest ancestor at the requested corrected rank. If the input taxon already has that rank, it returns the input taxon; if no ancestor has that rank, it returns the input taxon as a fallback. It accepts a scalar taxon, list-like input, numpy arrays, or pandas Series and returns the same container type where possible.
+
 `is_leaf(taxon)` returns whether taxa have no children in the taxonomy tree. A scalar taxon returns a `bool`; a list-like input returns a list of booleans; a numpy array returns a boolean array with the original shape; and a pandas Series returns a boolean Series with the original index.
+
+`is_child(taxon_a, taxon_b)` returns whether `taxon_a` is a direct child of `taxon_b`. It uses `tu.parent` directly, so each pairwise check is O(1).
+
+`is_descendent(taxon_a, taxon_b)` returns whether `taxon_a` is a strict descendant of `taxon_b`; a taxon is not considered a descendant of itself. The first call builds a cached tree interval index in O(n), then each pairwise check is O(1).
+
+`is_child` and `is_descendent` accept either two scalar taxa or two list-like inputs of the same length. Scalar inputs return a `bool`; list-like inputs return a list of booleans; numpy arrays return boolean arrays with the original `taxon_a` shape; and pandas Series return boolean Series with the original `taxon_a` index.
 
 `topology(taxon, anchor_rank=None, stat=None)` returns subtree topology metrics including taxon counts, leaf fraction, depth, branchiness, and `topology_scale`. Pass `anchor_rank="F"` to summarize the nearest family ancestor instead of the exact taxon. With `stat=None`, a single taxon returns a pandas Series and a list, array, or pandas Series returns a DataFrame.
 

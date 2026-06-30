@@ -48,7 +48,10 @@ tu.get_t2a(taxa, low_memory=None)                         # Return accessions as
 # Tree queries
 tu.get_branch(taxon)                                      # Return the root-to-taxon branch.
 tu.get_subtree(taxon)                                     # Return taxon plus all descendants.
+tu.get_ancestor(taxon, anchor_rank)                       # Return nearest ancestor at a rank.
 tu.is_leaf(taxon_or_taxa)                                 # Test whether taxa have no child nodes.
+tu.is_child(taxon_a, taxon_b)                             # Test whether taxon_a is a direct child of taxon_b.
+tu.is_descendent(taxon_a, taxon_b)                        # Test whether taxon_a is below taxon_b.
 tu.get_lca(taxon_a, taxon_b)                              # Return the lowest common ancestor.
 tu.get_distance(taxon_a, taxon_b)                         # Return tree edge distance through the LCA.
 tu.sort_taxa(taxa)                                        # Sort taxa in taxonomic order.
@@ -67,7 +70,15 @@ In taxutils, `accessions=list/of/accessions` can be passed to call load_a2t on c
 
 `get_lca(a, b)` returns the lowest common ancestor of two taxa. `get_distance(a, b)` returns the edge distance between two taxa through their lowest common ancestor. Depths are cached lazily as these methods are called.
 
+`get_ancestor(taxon, anchor_rank)` returns the nearest ancestor at the requested corrected rank. If the input taxon already has that rank, it returns the input taxon; if no ancestor has that rank, it returns the input taxon as a fallback. It accepts a single taxon, list-like input, NumPy arrays, or pandas Series and returns the same container type where possible.
+
 `is_leaf(taxon)` returns whether a taxon has no child nodes in the taxonomy tree. It accepts a single taxon, list-like input, NumPy arrays, or pandas Series. A single taxon returns a `bool`; a list-like input returns a list of booleans; a NumPy array returns a boolean array with the original shape; and a pandas Series returns a boolean Series with the original index.
+
+`is_child(taxon_a, taxon_b)` returns whether `taxon_a` is a direct child of `taxon_b`. It uses the parent lookup directly, so each pairwise check is O(1).
+
+`is_descendent(taxon_a, taxon_b)` returns whether `taxon_a` is a strict descendant of `taxon_b`; a taxon is not considered a descendant of itself. The first call builds a cached tree interval index in O(n), and subsequent pairwise checks are O(1).
+
+`is_child` and `is_descendent` accept either two scalar taxa or two list-like inputs of the same length. Scalar inputs return a `bool`; list-like inputs return a list of booleans; NumPy arrays return boolean arrays with the original `taxon_a` shape; and pandas Series return boolean Series with the original `taxon_a` index.
 
 `topology(taxon, anchor_rank=None, stat=None)` returns subtree topology metrics such as taxon count, leaf fraction, depth, branchiness, and `topology_scale`. Pass `anchor_rank="F"` to summarize the nearest family-level ancestor. With `stat=None`, a single taxon returns a Series and a list, array, or Series returns a DataFrame.
 

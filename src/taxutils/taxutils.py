@@ -48,6 +48,7 @@ class TaxonomicUtils:
             for taxon, parent in self.parent.items()
         }
         self._tree = None
+        self._descendant_index = None
         self._depth = {}
         self._a2t_checked = False
     
@@ -128,6 +129,41 @@ class TaxonomicUtils:
                 tree[int(v)].append(int(k))
         self._tree = tree
 
+    def _load_descendant_index(self):
+        if self._tree is None:
+            self._load_tree()
+
+        start = {}
+        end = {}
+        visited = set()
+        tick = 0
+        roots = [
+            taxon
+            for taxon, parent in self.parent.items()
+            if parent is None or parent == taxon or parent not in self.parent
+        ]
+
+        for root in roots + list(self.parent):
+            if root in visited:
+                continue
+            stack = [(int(root), False)]
+            while stack:
+                node, exiting = stack.pop()
+                if exiting:
+                    end[node] = tick - 1
+                    continue
+                if node in visited:
+                    continue
+                visited.add(node)
+                start[node] = tick
+                tick += 1
+                stack.append((node, True))
+                for child in reversed(self._tree.get(node, [])):
+                    if child not in visited:
+                        stack.append((child, False))
+
+        self._descendant_index = (start, end)
+
     def _get_depth(self, taxon):
         taxon = int(taxon)
         if taxon in self._depth:
@@ -180,6 +216,32 @@ class TaxonomicUtils:
 
         return [check(value) for value in taxon]
 
+    def is_child(self, taxon_a, taxon_b):
+        """Return whether taxon_a is a direct child of taxon_b."""
+        def check(a, b):
+            if pd.isna(a) or pd.isna(b):
+                return False
+            return self.parent.get(int(a)) == int(b)
+
+        return _pairwise_taxa_result(taxon_a, taxon_b, check, name="is_child")
+
+    def is_descendent(self, taxon_a, taxon_b):
+        """Return whether taxon_a is a strict descendant of taxon_b."""
+        if self._descendant_index is None:
+            self._load_descendant_index()
+        start, end = self._descendant_index
+
+        def check(a, b):
+            if pd.isna(a) or pd.isna(b):
+                return False
+            a = int(a)
+            b = int(b)
+            if a == b or a not in start or b not in start:
+                return False
+            return start[b] <= start[a] <= end[b]
+
+        return _pairwise_taxa_result(taxon_a, taxon_b, check, name="is_descendent")
+
     def _ancestor_at_rank(self, taxon, rank, rank_base=None):
         rank_code = _rank_to_code(rank)
         if rank_base is None:
@@ -189,6 +251,28 @@ class TaxonomicUtils:
             if rank_base.get(branch_taxon) == rank_code:
                 return branch_taxon
         return anchor
+
+    def get_ancestor(self, taxon, anchor_rank):
+        """Return the nearest ancestor at a rank, preserving input type."""
+        rank_code = _rank_to_code(anchor_rank)
+        rank_base = dict(zip(self.nodes["taxon"], self.nodes["rank_base"]))
+
+        def get_one(value):
+            if pd.isna(value):
+                return np.nan
+            return self._ancestor_at_rank(value, rank_code, rank_base)
+
+        if isinstance(taxon, pd.Series):
+            return taxon.map(get_one)
+
+        if isinstance(taxon, np.ndarray):
+            values = [get_one(value) for value in taxon.astype(object).ravel()]
+            return np.asarray(values).reshape(taxon.shape)
+
+        if np.isscalar(taxon):
+            return get_one(taxon)
+
+        return [get_one(value) for value in taxon]
 
     def topology(self, taxon, anchor_rank=None, stat=None):
         """Return subtree topology metrics or a single topology statistic."""
@@ -566,6 +650,44 @@ def _as_taxa_list(taxa):
     else:
         values = list(taxa)
     return [int(t) for t in values if not pd.isna(t)]
+
+
+def _is_taxon_scalar(value):
+    return value is None or value is pd.NA or np.isscalar(value)
+
+
+def _pairwise_values(value):
+    if isinstance(value, pd.Series):
+        return value.tolist()
+    if isinstance(value, np.ndarray):
+        return value.ravel().tolist()
+    return list(value)
+
+
+def _pairwise_taxa_result(taxon_a, taxon_b, check, name):
+    scalar_a = _is_taxon_scalar(taxon_a)
+    scalar_b = _is_taxon_scalar(taxon_b)
+
+    if scalar_a and scalar_b:
+        return check(taxon_a, taxon_b)
+
+    if scalar_a != scalar_b:
+        raise ValueError("taxon_a and taxon_b must both be scalar or both be list-like")
+
+    values_a = _pairwise_values(taxon_a)
+    values_b = _pairwise_values(taxon_b)
+    if len(values_a) != len(values_b):
+        raise ValueError("taxon_a and taxon_b must have the same length")
+
+    values = [check(a, b) for a, b in zip(values_a, values_b)]
+
+    if isinstance(taxon_a, pd.Series):
+        return pd.Series(values, index=taxon_a.index, name=name, dtype=bool)
+
+    if isinstance(taxon_a, np.ndarray):
+        return np.asarray(values, dtype=bool).reshape(taxon_a.shape)
+
+    return values
 
 
 def _as_string_list(strings):
