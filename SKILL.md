@@ -19,19 +19,22 @@ from taxutils import taxutils
 tu = taxutils()
 ```
 
-If `TAXUTILS_GLOBALS` is not set, resources are stored under `./taxutils/` relative to the current working directory. Managed resources include `names.dmp`, `nodes.dmp`, `targets.json`, `nucl_gb.accession2taxid.gz`, and optionally `nucl_gb.accession2taxid.db`.
+If `TAXUTILS_GLOBALS` is not set, resources are stored under `./taxutils/` relative to the current working directory. Managed resources include `names.dmp`, `nodes.dmp`, `targets.json`, `nucl_gb.accession2taxid.gz`, optionally `nucl_wgs.accession2taxid.gz`, and optionally `nucl.accession2taxid.db`.
 
 Use:
 
 ```python
-tu = taxutils(accessions=None, low_memory=True, targets_json=None, rebuild=False)
+tu = taxutils(accessions=None, low_memory=True, targets_json=None, rebuild=False, wgs=False)
 ```
 
 - `accessions`: optional accession/header list to load into `tu.a2t` during construction.
-- `low_memory=True`: default; scans compressed `nucl_gb.accession2taxid.gz` for requested lookups.
+- `low_memory=True`: default; scans compressed accession2taxid files for requested lookups.
 - `low_memory=False`: builds/reuses a SQLite accession database for faster repeated lookup work. Expect a slow first build and large disk usage.
 - `targets_json`: custom pathogen/target JSON path in place of the default downloaded target list.
 - `rebuild=True`: redownloads managed taxonomy/target/accession files and rebuilds the SQLite database.
+- `wgs=False`: default; uses `nucl_gb.accession2taxid.gz` only. Pass `wgs=True` to also download/use `nucl_wgs.accession2taxid.gz` for WGS/TSA accessions.
+
+SQLite mode always uses `nucl.accession2taxid.db`; if it was built GB-only, a later `wgs=True` call upgrades the same DB with WGS mappings. Existing legacy DBs without source metadata are inferred from DB size.
 
 ## Core Object
 
@@ -99,7 +102,7 @@ taxon = tu.a2t[acc_ids[0]]
 name = tu.names[taxon]
 ```
 
-`load_a2t` parses input strings with versions enabled and overwrites `tu.a2t` by default. Preserve existing mappings with:
+`load_a2t` parses input strings with versions enabled and overwrites `tu.a2t` by default. Method-level `wgs=None` uses the constructor setting; pass `wgs=True` to include WGS/TSA accessions for a specific call. Preserve existing mappings with:
 
 ```python
 tu.load_a2t(more_acc_ids, extend=True)
@@ -158,7 +161,10 @@ Use these public methods:
 ```python
 branch = tu.get_branch(taxon)      # root-to-taxon branch
 subtree = tu.get_subtree(taxon)    # taxon plus descendants
+family = tu.get_ancestor(taxon, anchor_rank="F")
 leaf = tu.is_leaf(taxon)           # True if taxon has no child nodes
+child = tu.is_child(taxon_a, taxon_b)
+descendent = tu.is_descendent(taxon_a, taxon_b)
 lca = tu.get_lca(taxon_a, taxon_b)
 distance = tu.get_distance(taxon_a, taxon_b)
 ordered = tu.sort_taxa(taxa)
@@ -169,7 +175,15 @@ scale = tu.topology(taxon, anchor_rank="F", stat="topology_scale")
 
 `format_tree(taxa, include_ancestors=True, root=1, indent="\t")` includes ancestors by default and returns a pandas Series named `name`.
 
+`get_ancestor(taxon, anchor_rank)` returns the nearest ancestor at the requested corrected rank. If the input taxon already has that rank, it returns the input taxon; if no ancestor has that rank, it returns the input taxon as a fallback. It accepts a scalar taxon, list-like input, numpy arrays, or pandas Series and returns the same container type where possible.
+
 `is_leaf(taxon)` returns whether taxa have no children in the taxonomy tree. A scalar taxon returns a `bool`; a list-like input returns a list of booleans; a numpy array returns a boolean array with the original shape; and a pandas Series returns a boolean Series with the original index.
+
+`is_child(taxon_a, taxon_b)` returns whether `taxon_a` is a direct child of `taxon_b`. It uses `tu.parent` directly, so each pairwise check is O(1).
+
+`is_descendent(taxon_a, taxon_b)` returns whether `taxon_a` is a strict descendant of `taxon_b`; a taxon is not considered a descendant of itself. The first call builds a cached tree interval index in O(n), then each pairwise check is O(1).
+
+`is_child` and `is_descendent` accept either two scalar taxa or two list-like inputs of the same length. Scalar inputs return a `bool`; list-like inputs return a list of booleans; numpy arrays return boolean arrays with the original `taxon_a` shape; and pandas Series return boolean Series with the original `taxon_a` index.
 
 `topology(taxon, anchor_rank=None, stat=None)` returns subtree topology metrics including taxon counts, leaf fraction, depth, branchiness, and `topology_scale`. Pass `anchor_rank="F"` to summarize the nearest family ancestor instead of the exact taxon. With `stat=None`, a single taxon returns a pandas Series and a list, array, or pandas Series returns a DataFrame.
 
@@ -325,7 +339,7 @@ Use `tu.get_lca(a, b)` to verify that reported taxa preserve expected hierarchy.
 ## Practical Guidance
 
 - Use `load_a2t` for accession subsets and `get_t2a` for selected taxon-to-accession lookups.
-- Keep accession versions when mapping against NCBI `nucl_gb.accession2taxid.gz`; the package’s lookup key is `accession.version`.
+- Keep accession versions when mapping against NCBI accession2taxid files; the package’s lookup key is `accession.version`.
 - Use `set.update(...)` when adding many branch or subtree taxa to a set.
 - Call `tu.sort_taxa(...)` after set operations whenever display order matters.
 - Add `tu.nodes["name"] = tu.nodes["taxon"].map(tu.names)` before vectorized name searches or report tables.

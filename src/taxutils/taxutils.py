@@ -21,6 +21,12 @@ from .utils import (
 
 logger = get_logger(__name__)
 
+A2T_BASE_URL = "https://ftp.ncbi.nih.gov/pub/taxonomy/accession2taxid"
+NUCL_GB_A2T_FILENAME = "nucl_gb.accession2taxid.gz"
+NUCL_WGS_A2T_FILENAME = "nucl_wgs.accession2taxid.gz"
+NUCL_A2T_DB_FILENAME = "nucl.accession2taxid.db"
+NUCL_A2T_WGS_DB_MIN_BYTES = 10_000_000_000
+
 
 def _download_file(url, path):
     tmp_path = f"{path}.tmp"
@@ -39,6 +45,7 @@ class TaxonomicUtils:
     a2t: dict = None
     parent: dict = None
     _low_memory: bool = True
+    _wgs: bool = False
 
     def __post_init__(self):
         if self.parent is None:
@@ -48,6 +55,7 @@ class TaxonomicUtils:
             for taxon, parent in self.parent.items()
         }
         self._tree = None
+        self._descendant_index = None
         self._depth = {}
         self._a2t_checked = False
     
@@ -76,10 +84,18 @@ class TaxonomicUtils:
         body = ",\n  ".join(fields)
         return f"TaxonomicUtils(\n  {body}\n)"
         
-    def load_a2t(self, accessions: List[str], low_memory: bool = None, extend: bool = False):
+    def load_a2t(
+        self,
+        accessions: List[str],
+        low_memory: bool = None,
+        extend: bool = False,
+        wgs: bool = None,
+    ):
         """Load accession-to-taxon mappings, optionally extending the existing map."""
         if low_memory is None:
             low_memory = self._low_memory
+        if wgs is None:
+            wgs = self._wgs
         if extend:
             existing = dict(self.a2t or {})
             accessions = sorted({
@@ -95,6 +111,7 @@ class TaxonomicUtils:
             accessions,
             low_memory=low_memory,
             verbose=not self._a2t_checked,
+            wgs=wgs,
         )
         if extend:
             existing.update(self.a2t or {})
@@ -109,14 +126,17 @@ class TaxonomicUtils:
         """Return canonical rank codes in taxonomic order."""
         return list(RANK_ORDER)
 
-    def get_t2a(self, taxa, low_memory: bool = None):
+    def get_t2a(self, taxa, low_memory: bool = None, wgs: bool = None):
         """Return accessions assigned to the provided taxa."""
         if low_memory is None:
             low_memory = self._low_memory
+        if wgs is None:
+            wgs = self._wgs
         accessions = get_t2a(
             taxa,
             low_memory=low_memory,
             verbose=not self._a2t_checked,
+            wgs=wgs,
         )
         self._a2t_checked = True
         return accessions
@@ -127,6 +147,41 @@ class TaxonomicUtils:
             if v is not None:
                 tree[int(v)].append(int(k))
         self._tree = tree
+
+    def _load_descendant_index(self):
+        if self._tree is None:
+            self._load_tree()
+
+        start = {}
+        end = {}
+        visited = set()
+        tick = 0
+        roots = [
+            taxon
+            for taxon, parent in self.parent.items()
+            if parent is None or parent == taxon or parent not in self.parent
+        ]
+
+        for root in roots + list(self.parent):
+            if root in visited:
+                continue
+            stack = [(int(root), False)]
+            while stack:
+                node, exiting = stack.pop()
+                if exiting:
+                    end[node] = tick - 1
+                    continue
+                if node in visited:
+                    continue
+                visited.add(node)
+                start[node] = tick
+                tick += 1
+                stack.append((node, True))
+                for child in reversed(self._tree.get(node, [])):
+                    if child not in visited:
+                        stack.append((child, False))
+
+        self._descendant_index = (start, end)
 
     def _get_depth(self, taxon):
         taxon = int(taxon)
@@ -180,6 +235,32 @@ class TaxonomicUtils:
 
         return [check(value) for value in taxon]
 
+    def is_child(self, taxon_a, taxon_b):
+        """Return whether taxon_a is a direct child of taxon_b."""
+        def check(a, b):
+            if pd.isna(a) or pd.isna(b):
+                return False
+            return self.parent.get(int(a)) == int(b)
+
+        return _pairwise_taxa_result(taxon_a, taxon_b, check, name="is_child")
+
+    def is_descendent(self, taxon_a, taxon_b):
+        """Return whether taxon_a is a strict descendant of taxon_b."""
+        if self._descendant_index is None:
+            self._load_descendant_index()
+        start, end = self._descendant_index
+
+        def check(a, b):
+            if pd.isna(a) or pd.isna(b):
+                return False
+            a = int(a)
+            b = int(b)
+            if a == b or a not in start or b not in start:
+                return False
+            return start[b] <= start[a] <= end[b]
+
+        return _pairwise_taxa_result(taxon_a, taxon_b, check, name="is_descendent")
+
     def _ancestor_at_rank(self, taxon, rank, rank_base=None):
         rank_code = _rank_to_code(rank)
         if rank_base is None:
@@ -189,6 +270,28 @@ class TaxonomicUtils:
             if rank_base.get(branch_taxon) == rank_code:
                 return branch_taxon
         return anchor
+
+    def get_ancestor(self, taxon, anchor_rank):
+        """Return the nearest ancestor at a rank, preserving input type."""
+        rank_code = _rank_to_code(anchor_rank)
+        rank_base = dict(zip(self.nodes["taxon"], self.nodes["rank_base"]))
+
+        def get_one(value):
+            if pd.isna(value):
+                return np.nan
+            return self._ancestor_at_rank(value, rank_code, rank_base)
+
+        if isinstance(taxon, pd.Series):
+            return taxon.map(get_one)
+
+        if isinstance(taxon, np.ndarray):
+            values = [get_one(value) for value in taxon.astype(object).ravel()]
+            return np.asarray(values).reshape(taxon.shape)
+
+        if np.isscalar(taxon):
+            return get_one(taxon)
+
+        return [get_one(value) for value in taxon]
 
     def topology(self, taxon, anchor_rank=None, stat=None):
         """Return subtree topology metrics or a single topology statistic."""
@@ -471,6 +574,7 @@ def download_taxonomy(
     low_memory: bool=True,
     targets_json=None,
     rebuild: bool=False,
+    wgs: bool=False,
 ) -> TaxonomicUtils:
     """Download/load taxonomy resources and return a TaxonomicUtils object."""
     save_path = TAXUTILS_GLOBALS["save_folder"]
@@ -524,10 +628,10 @@ def download_taxonomy(
     parent = build_parent(nodes)
     target_taxa = build_target_taxa(nodes, names, targets_json=targets_json)
     if rebuild or not low_memory:
-        _ensure_default_a2t_db(rebuild=rebuild)
+        _ensure_default_a2t_db(rebuild=rebuild, wgs=wgs)
     a2t = None
     if accessions is not None:
-        a2t = build_a2t(accessions, low_memory=low_memory)
+        a2t = build_a2t(accessions, low_memory=low_memory, wgs=wgs)
         a2t[TAXUTILS_GLOBALS["UNCLASSIFIED"]] = "unclassified"
     names[2697049] = "SARS-CoV-2"
     names[694009] = "SARS-related-CoV"
@@ -538,6 +642,7 @@ def download_taxonomy(
         a2t=a2t,
         parent=parent,
         _low_memory=low_memory,
+        _wgs=wgs,
     )
 
 
@@ -546,6 +651,7 @@ def taxutils(
     low_memory: bool=True,
     targets_json=None,
     rebuild: bool=False,
+    wgs: bool=False,
 ) -> TaxonomicUtils:
     """Build and return a TaxonomicUtils object."""
     return download_taxonomy(
@@ -553,6 +659,7 @@ def taxutils(
         low_memory=low_memory,
         targets_json=targets_json,
         rebuild=rebuild,
+        wgs=wgs,
     )
 
     
@@ -566,6 +673,44 @@ def _as_taxa_list(taxa):
     else:
         values = list(taxa)
     return [int(t) for t in values if not pd.isna(t)]
+
+
+def _is_taxon_scalar(value):
+    return value is None or value is pd.NA or np.isscalar(value)
+
+
+def _pairwise_values(value):
+    if isinstance(value, pd.Series):
+        return value.tolist()
+    if isinstance(value, np.ndarray):
+        return value.ravel().tolist()
+    return list(value)
+
+
+def _pairwise_taxa_result(taxon_a, taxon_b, check, name):
+    scalar_a = _is_taxon_scalar(taxon_a)
+    scalar_b = _is_taxon_scalar(taxon_b)
+
+    if scalar_a and scalar_b:
+        return check(taxon_a, taxon_b)
+
+    if scalar_a != scalar_b:
+        raise ValueError("taxon_a and taxon_b must both be scalar or both be list-like")
+
+    values_a = _pairwise_values(taxon_a)
+    values_b = _pairwise_values(taxon_b)
+    if len(values_a) != len(values_b):
+        raise ValueError("taxon_a and taxon_b must have the same length")
+
+    values = [check(a, b) for a, b in zip(values_a, values_b)]
+
+    if isinstance(taxon_a, pd.Series):
+        return pd.Series(values, index=taxon_a.index, name=name, dtype=bool)
+
+    if isinstance(taxon_a, np.ndarray):
+        return np.asarray(values, dtype=bool).reshape(taxon_a.shape)
+
+    return values
 
 
 def _as_string_list(strings):
@@ -652,51 +797,176 @@ def _rank_to_code(rank):
     return RANK_ALIASES[key]
 
 
-def _ensure_a2t_db(gz_path, a2t_db, verbose=True, rebuild=False):
+def _a2t_filenames(wgs=False):
+    filenames = [NUCL_GB_A2T_FILENAME]
+    if wgs:
+        filenames.append(NUCL_WGS_A2T_FILENAME)
+    return filenames
+
+
+def _a2t_db_path():
+    return os.path.join(TAXUTILS_GLOBALS["save_folder"], NUCL_A2T_DB_FILENAME)
+
+
+def _a2t_db_has_wgs(a2t_db):
+    return os.path.exists(a2t_db) and os.path.getsize(a2t_db) >= NUCL_A2T_WGS_DB_MIN_BYTES
+
+
+def _ensure_a2t_metadata(cur):
+    cur.execute("CREATE TABLE IF NOT EXISTS a2t_sources (source TEXT PRIMARY KEY, status TEXT)")
+
+
+def _loaded_a2t_sources(cur):
+    _ensure_a2t_metadata(cur)
+    rows = cur.execute("SELECT source, status FROM a2t_sources").fetchall()
+    return {source: status for source, status in rows}
+
+
+def _infer_legacy_a2t_sources(a2t_db):
+    sources = {NUCL_GB_A2T_FILENAME}
+    if _a2t_db_has_wgs(a2t_db):
+        sources.add(NUCL_WGS_A2T_FILENAME)
+    return sources
+
+
+def _record_a2t_sources(cur, sources, status):
+    for source in sources:
+        cur.execute(
+            "INSERT OR REPLACE INTO a2t_sources (source, status) VALUES (?, ?)",
+            (source, status),
+        )
+
+
+def _ensure_a2t_indexes(cur):
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_accession ON a2t (accession)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_taxid ON a2t (taxid)")
+
+
+def _drop_a2t_indexes(cur):
+    cur.execute("DROP INDEX IF EXISTS idx_accession")
+    cur.execute("DROP INDEX IF EXISTS idx_taxid")
+
+
+def _insert_a2t_gz(cur, gz_path):
+    with gzip.open(gz_path, "rt") as f:
+        header = next(f).strip().split("\t")
+        acc_idx = header.index("accession.version")
+        taxon_idx = header.index("taxid")
+        batch = []
+        for line in f:
+            parts = line.strip().split("\t")
+            batch.append((parts[acc_idx], int(parts[taxon_idx])))
+            if len(batch) == 100_000:
+                cur.executemany("INSERT INTO a2t VALUES (?, ?)", batch)
+                batch.clear()
+        if batch:
+            cur.executemany("INSERT INTO a2t VALUES (?, ?)", batch)
+
+
+def _build_a2t_db(gz_paths, a2t_db, verbose=True):
+    logger.info("Building SQLite db from gz file, this will take a while...")
+    tmp_db = f"{a2t_db}.tmp"
+    if os.path.exists(tmp_db):
+        os.remove(tmp_db)
+    try:
+        conn = sqlite3.connect(tmp_db)
+        cur = conn.cursor()
+        cur.execute("CREATE TABLE a2t (accession TEXT, taxid INTEGER)")
+        _ensure_a2t_metadata(cur)
+        for gz_path in gz_paths:
+            logger.info(f"Adding {os.path.basename(gz_path)} to SQLite db...")
+            _insert_a2t_gz(cur, gz_path)
+        _record_a2t_sources(cur, [os.path.basename(path) for path in gz_paths], "complete")
+        _ensure_a2t_indexes(cur)
+        conn.commit()
+        conn.close()
+        os.replace(tmp_db, a2t_db)
+    finally:
+        if os.path.exists(tmp_db):
+            os.remove(tmp_db)
+    logger.info("SQLite db built.")
+
+
+def _upgrade_a2t_db(a2t_db, gz_paths, loaded_sources, verbose=True):
+    missing_paths = [
+        path
+        for path in gz_paths
+        if loaded_sources.get(os.path.basename(path)) != "complete"
+    ]
+    if not missing_paths:
+        return
+
+    conn = sqlite3.connect(a2t_db)
+    try:
+        cur = conn.cursor()
+        _drop_a2t_indexes(cur)
+        _record_a2t_sources(cur, [os.path.basename(path) for path in missing_paths], "loading")
+        conn.commit()
+        for gz_path in missing_paths:
+            logger.info(f"Adding {os.path.basename(gz_path)} to SQLite db...")
+            _insert_a2t_gz(cur, gz_path)
+            _record_a2t_sources(cur, [os.path.basename(gz_path)], "complete")
+            conn.commit()
+        _ensure_a2t_indexes(cur)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _ensure_a2t_db(gz_paths, a2t_db, verbose=True, rebuild=False, wgs=False):
     """Build the SQLite a2t db from gz if it doesn't exist, ensuring both indexes exist."""
-    if not os.path.exists(gz_path):
-        gz_path = download_a2t(verbose=verbose)
+    if isinstance(gz_paths, str):
+        gz_paths = [gz_paths]
+    if any(not os.path.exists(gz_path) for gz_path in gz_paths):
+        gz_paths = download_a2t_files(verbose=verbose, wgs=wgs)
     if rebuild and os.path.exists(a2t_db):
         os.remove(a2t_db)
     if not os.path.exists(a2t_db):
-        logger.info("Building SQLite db from gz file, this will take a while...")
-        conn = sqlite3.connect(a2t_db)
-        cur = conn.cursor()
-        cur.execute("CREATE TABLE a2t (accession TEXT, taxid INTEGER)")
-        with gzip.open(gz_path, "rt") as f:
-            next(f)
-            batch = []
-            for line in f:
-                parts = line.strip().split("\t")
-                batch.append((parts[1], int(parts[2])))
-                if len(batch) == 100_000:
-                    cur.executemany("INSERT INTO a2t VALUES (?, ?)", batch)
-                    batch.clear()
-            if batch:
-                cur.executemany("INSERT INTO a2t VALUES (?, ?)", batch)
-        cur.execute("CREATE INDEX idx_accession ON a2t (accession)")
-        cur.execute("CREATE INDEX idx_taxid ON a2t (taxid)")
-        conn.commit()
-        conn.close()
-        logger.info("SQLite db built.")
-    else:
-        # Ensure the taxon lookup index exists on dbs built before this index was added.
-        conn = sqlite3.connect(a2t_db)
-        cur = conn.cursor()
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_taxid ON a2t (taxid)")
-        conn.commit()
-        conn.close()
+        _build_a2t_db(gz_paths, a2t_db, verbose=verbose)
+        return
+
+    conn = sqlite3.connect(a2t_db)
+    cur = conn.cursor()
+    sources = _loaded_a2t_sources(cur)
+    if not sources:
+        _record_a2t_sources(cur, _infer_legacy_a2t_sources(a2t_db), "complete")
+        sources = _loaded_a2t_sources(cur)
+    interrupted = any(status != "complete" for status in sources.values())
+    _ensure_a2t_indexes(cur)
+    conn.commit()
+    conn.close()
+
+    if interrupted:
+        logger.warning("Found an incomplete SQLite a2t update; rebuilding the database.")
+        os.remove(a2t_db)
+        _build_a2t_db(gz_paths, a2t_db, verbose=verbose)
+        return
+
+    if wgs and sources.get(NUCL_WGS_A2T_FILENAME) != "complete":
+        logger.info("SQLite db exists without WGS accessions; adding WGS accessions.")
+        _upgrade_a2t_db(a2t_db, gz_paths, sources, verbose=verbose)
 
 
-def _ensure_default_a2t_db(verbose=True, rebuild=False):
-    gz_path = download_a2t(verbose=verbose, rebuild=rebuild)
-    a2t_db = os.path.join(TAXUTILS_GLOBALS["save_folder"], "nucl_gb.accession2taxid.db")
-    _ensure_a2t_db(gz_path, a2t_db, verbose=verbose, rebuild=rebuild)
-    return gz_path, a2t_db
+def _ensure_default_a2t_db(verbose=True, rebuild=False, wgs=False):
+    gz_paths = download_a2t_files(verbose=verbose, rebuild=rebuild, wgs=wgs)
+    a2t_db = _a2t_db_path()
+    _ensure_a2t_db(gz_paths, a2t_db, verbose=verbose, rebuild=rebuild, wgs=wgs)
+    return gz_paths, a2t_db
 
 def download_a2t(verbose=True, rebuild=False):
-    gz_path = os.path.join(TAXUTILS_GLOBALS["save_folder"], "nucl_gb.accession2taxid.gz")
-    a2t_url = "https://ftp.ncbi.nih.gov/pub/taxonomy/accession2taxid/nucl_gb.accession2taxid.gz"
+    return _download_a2t_file(NUCL_GB_A2T_FILENAME, verbose=verbose, rebuild=rebuild)
+
+
+def download_a2t_files(verbose=True, rebuild=False, wgs=False):
+    return [
+        _download_a2t_file(filename, verbose=verbose, rebuild=rebuild)
+        for filename in _a2t_filenames(wgs=wgs)
+    ]
+
+
+def _download_a2t_file(filename, verbose=True, rebuild=False):
+    gz_path = os.path.join(TAXUTILS_GLOBALS["save_folder"], filename)
+    a2t_url = f"{A2T_BASE_URL}/{filename}"
     if rebuild or not os.path.exists(gz_path):
         os.makedirs(os.path.dirname(gz_path), exist_ok=True)
         logger.info(f"Downloading {gz_path}...")
@@ -707,27 +977,30 @@ def download_a2t(verbose=True, rebuild=False):
 
     return gz_path
 
-def build_a2t(accessions, low_memory=True, verbose=True):
+def build_a2t(accessions, low_memory=True, verbose=True, wgs=False):
     accessions = _accessions_for_lookup(accessions)
 
     if low_memory:
-        gz_path = download_a2t(verbose=verbose)
+        gz_paths = download_a2t_files(verbose=verbose, wgs=wgs)
         accession_set = set(accessions) if not isinstance(accessions, set) else accessions
         a2t = {}
-        with gzip.open(gz_path, 'rt') as f:
-            header = next(f).strip().split("\t")
-            acc_idx = header.index("accession.version")
-            taxon_idx = header.index("taxid")
-            for line in f:
-                parts = line.strip().split("\t")
-                if parts[acc_idx] in accession_set:
-                    a2t[parts[acc_idx]] = int(parts[taxon_idx])
-                    if len(a2t) == len(accession_set):
-                        break
+        for gz_path in gz_paths:
+            with gzip.open(gz_path, 'rt') as f:
+                header = next(f).strip().split("\t")
+                acc_idx = header.index("accession.version")
+                taxon_idx = header.index("taxid")
+                for line in f:
+                    parts = line.strip().split("\t")
+                    if parts[acc_idx] in accession_set:
+                        a2t[parts[acc_idx]] = int(parts[taxon_idx])
+                        if len(a2t) == len(accession_set):
+                            break
+            if len(a2t) == len(accession_set):
+                break
         return a2t
 
     # SQLite path
-    _, a2t_db = _ensure_default_a2t_db(verbose=verbose)
+    _, a2t_db = _ensure_default_a2t_db(verbose=verbose, wgs=wgs)
 
     conn = sqlite3.connect(a2t_db)
     acc_df = pd.DataFrame({"accession": list(accessions)})
@@ -737,28 +1010,29 @@ def build_a2t(accessions, low_memory=True, verbose=True):
     return dict(zip(result["accession"], result["taxid"]))
 
 
-def get_t2a(taxa, low_memory=True, verbose=True):
+def get_t2a(taxa, low_memory=True, verbose=True, wgs=False):
     """Return the set of accessions belonging to the given taxa.
 
     When low_memory=True, scans the compressed file directly.
     When low_memory=False, uses a local SQLite database for speed.
     """
     if low_memory:
-        gz_path = download_a2t(verbose=verbose)
+        gz_paths = download_a2t_files(verbose=verbose, wgs=wgs)
         taxon_set = {int(t) for t in taxa}
         accessions = set()
-        with gzip.open(gz_path, 'rt') as f:
-            header = next(f).strip().split("\t")
-            acc_idx = header.index("accession.version")
-            taxon_idx = header.index("taxid")
-            for line in f:
-                parts = line.strip().split("\t")
-                if int(parts[taxon_idx]) in taxon_set:
-                    accessions.add(parts[acc_idx])
+        for gz_path in gz_paths:
+            with gzip.open(gz_path, 'rt') as f:
+                header = next(f).strip().split("\t")
+                acc_idx = header.index("accession.version")
+                taxon_idx = header.index("taxid")
+                for line in f:
+                    parts = line.strip().split("\t")
+                    if int(parts[taxon_idx]) in taxon_set:
+                        accessions.add(parts[acc_idx])
         return accessions
 
     # SQLite path
-    _, a2t_db = _ensure_default_a2t_db(verbose=verbose)
+    _, a2t_db = _ensure_default_a2t_db(verbose=verbose, wgs=wgs)
 
     conn = sqlite3.connect(a2t_db)
     taxon_df = pd.DataFrame({"taxid": [int(t) for t in taxa]})
