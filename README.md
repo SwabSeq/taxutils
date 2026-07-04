@@ -38,12 +38,12 @@ Core functions are listed here. See the example notebook for a fuller walkthroug
 
 ```python
 # Build object
-tu = taxutils(accessions=None, low_memory=True, targets_json=None, rebuild=False)  # Build the taxonomy utility object.
+tu = taxutils(accessions=None, low_memory=True, targets_json=None, rebuild=False, wgs=False)  # Build the taxonomy utility object.
 
 # Accession parsing and mapping
 tu.parse_accession(header_strings, version=True)          # Extract one accession per string.
-tu.load_a2t(accessions, low_memory=None, extend=False)    # Load accession-to-taxon mappings into tu.a2t.
-tu.get_t2a(taxa, low_memory=None)                         # Return accessions assigned to taxa.
+tu.load_a2t(accessions, low_memory=None, extend=False, wgs=None)  # Load accession-to-taxon mappings into tu.a2t.
+tu.get_t2a(taxa, low_memory=None, wgs=None)                       # Return accessions assigned to taxa.
 
 # Tree queries
 tu.get_branch(taxon)                                      # Return the root-to-taxon branch.
@@ -64,7 +64,7 @@ tu.get_rank_order()                                       # Return canonical ran
 tu.higher_than_rank(taxa, rank)                           # Test whether taxa are higher than a rank.
 ```
 
-In taxutils, `accessions=list/of/accessions` can be passed to call load_a2t on construction of the taxutils object. A custom targets_json can similarly be passed in lieu of the default json explained below. `rebuild=True` redownloads the managed taxonomy, target, and accession files and rebuilds the SQLite accession database. `load_a2t` overwrites `tu.a2t` by default; pass `extend=True` to add missing mappings without discarding existing ones. Method-level `low_memory=None` uses the mode set when `tu` was built.
+In taxutils, `accessions=list/of/accessions` can be passed to call load_a2t on construction of the taxutils object. A custom targets_json can similarly be passed in lieu of the default json explained below. `rebuild=True` redownloads the managed taxonomy, target, and accession files and rebuilds the SQLite accession database. By default, accession lookups use `nucl_gb.accession2taxid.gz`; pass `wgs=True` to also download/use `nucl_wgs.accession2taxid.gz` for WGS/TSA accessions. SQLite mode always uses `nucl.accession2taxid.db`; if it was built GB-only, a later `wgs=True` call upgrades the same DB with WGS mappings. `load_a2t` overwrites `tu.a2t` by default; pass `extend=True` to add missing mappings without discarding existing ones. Method-level `low_memory=None` and `wgs=None` use the modes set when `tu` was built.
 
 `parse_accession` accepts strings, lists, arrays, and pandas Series. It returns the first accession found from each string using the same container type where possible; missing accessions are returned as `"NA"`.
 

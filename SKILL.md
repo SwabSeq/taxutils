@@ -19,19 +19,22 @@ from taxutils import taxutils
 tu = taxutils()
 ```
 
-If `TAXUTILS_GLOBALS` is not set, resources are stored under `./taxutils/` relative to the current working directory. Managed resources include `names.dmp`, `nodes.dmp`, `targets.json`, `nucl_gb.accession2taxid.gz`, and optionally `nucl_gb.accession2taxid.db`.
+If `TAXUTILS_GLOBALS` is not set, resources are stored under `./taxutils/` relative to the current working directory. Managed resources include `names.dmp`, `nodes.dmp`, `targets.json`, `nucl_gb.accession2taxid.gz`, optionally `nucl_wgs.accession2taxid.gz`, and optionally `nucl.accession2taxid.db`.
 
 Use:
 
 ```python
-tu = taxutils(accessions=None, low_memory=True, targets_json=None, rebuild=False)
+tu = taxutils(accessions=None, low_memory=True, targets_json=None, rebuild=False, wgs=False)
 ```
 
 - `accessions`: optional accession/header list to load into `tu.a2t` during construction.
-- `low_memory=True`: default; scans compressed `nucl_gb.accession2taxid.gz` for requested lookups.
+- `low_memory=True`: default; scans compressed accession2taxid files for requested lookups.
 - `low_memory=False`: builds/reuses a SQLite accession database for faster repeated lookup work. Expect a slow first build and large disk usage.
 - `targets_json`: custom pathogen/target JSON path in place of the default downloaded target list.
 - `rebuild=True`: redownloads managed taxonomy/target/accession files and rebuilds the SQLite database.
+- `wgs=False`: default; uses `nucl_gb.accession2taxid.gz` only. Pass `wgs=True` to also download/use `nucl_wgs.accession2taxid.gz` for WGS/TSA accessions.
+
+SQLite mode always uses `nucl.accession2taxid.db`; if it was built GB-only, a later `wgs=True` call upgrades the same DB with WGS mappings. Existing legacy DBs without source metadata are inferred from DB size.
 
 ## Core Object
 
@@ -99,7 +102,7 @@ taxon = tu.a2t[acc_ids[0]]
 name = tu.names[taxon]
 ```
 
-`load_a2t` parses input strings with versions enabled and overwrites `tu.a2t` by default. Preserve existing mappings with:
+`load_a2t` parses input strings with versions enabled and overwrites `tu.a2t` by default. Method-level `wgs=None` uses the constructor setting; pass `wgs=True` to include WGS/TSA accessions for a specific call. Preserve existing mappings with:
 
 ```python
 tu.load_a2t(more_acc_ids, extend=True)
@@ -336,7 +339,7 @@ Use `tu.get_lca(a, b)` to verify that reported taxa preserve expected hierarchy.
 ## Practical Guidance
 
 - Use `load_a2t` for accession subsets and `get_t2a` for selected taxon-to-accession lookups.
-- Keep accession versions when mapping against NCBI `nucl_gb.accession2taxid.gz`; the package’s lookup key is `accession.version`.
+- Keep accession versions when mapping against NCBI accession2taxid files; the package’s lookup key is `accession.version`.
 - Use `set.update(...)` when adding many branch or subtree taxa to a set.
 - Call `tu.sort_taxa(...)` after set operations whenever display order matters.
 - Add `tu.nodes["name"] = tu.nodes["taxon"].map(tu.names)` before vectorized name searches or report tables.
