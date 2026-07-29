@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "taxutils"
-version = "1.0.0"
+version = "1.0.3"
 description = "Utilities for working with taxonomic data."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -19,6 +19,7 @@ dependencies = [
     "numpy",
     "pandas",
 ]
+
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -27,6 +28,9 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Operating System :: OS Independent",
 ]
+
+[project.scripts]
+taxutils = "taxutils.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
