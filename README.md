@@ -1,6 +1,6 @@
 # taxutils
 
-Utilities for working with NCBI taxonomic data, accession-to-taxon mappings, taxonomy branches, corrected ranks, and pathogen target taxa.
+Utilities for working with NCBI taxonomic data, accession-to-taxon mappings, taxonomy branches, corrected ranks, and pathogen target taxa. A version is available in Rust with optimized command-line functions, [taxutils-rs](https://github.com/SwabSeq/taxutils-rs), also available for install with bioconda.
 
 # Install
 
