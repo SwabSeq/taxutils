@@ -11,6 +11,8 @@ setup(
             path="rust/Cargo.toml",
             binding=Binding.PyO3,
             py_limited_api=True,
+            # Editable installs otherwise default to an unoptimized Rust build.
+            debug=False,
         )
     ],
     zip_safe=False,

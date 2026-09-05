@@ -166,6 +166,7 @@ def fill_lca_mappings(out, lca_fill_state, max_size):
     ):
         key = None if pd.isna(a2t_taxon) else (accession, int(a2t_taxon))
         if pd.notna(lca_mapping):
+            lca_mapping = aggregate_lca_mapping(lca_mapping)
             lca_fill_state["last_key"] = key
             lca_fill_state["last_lca_mapping"] = lca_mapping
             if key is not None and max_size > 0:
@@ -178,7 +179,11 @@ def fill_lca_mappings(out, lca_fill_state, max_size):
             filled.append(cache[key])
         else:
             filled.append(pd.NA)
-    out.loc[:, "lca_mapping"] = filled
+    # Keep variable-sized mappings as Python objects. Assigning a list of
+    # strings directly makes NumPy infer a fixed-width Unicode dtype and can
+    # attempt an enormous temporary allocation for long Kraken mappings.
+    out["lca_counts"] = pd.Series(filled, index=out.index, dtype=object)
+    out = out.drop(columns=["lca_mapping"])
     return out
 
 
@@ -191,7 +196,7 @@ def normalize_chunk(out, lca_fill_state, lca_fill_cache_size):
     )
     out.loc[:, taxon_columns] = numeric_taxa
     out = fill_lca_mappings(out, lca_fill_state, lca_fill_cache_size)
-    out = out.dropna(subset=["label_taxon", "a2t_taxon", "lca_mapping"]).copy()
+    out = out.dropna(subset=["label_taxon", "a2t_taxon", "lca_counts"]).copy()
     if out.empty:
         return out
     return out.astype({"label_taxon": int, "a2t_taxon": int})
@@ -331,7 +336,6 @@ def main():
         os.makedirs(results_dir, exist_ok=True)
 
     topology_scales = {}
-    lca_mapping_cache = OrderedDict()
     movement_cache = OrderedDict()
     lca_fill_state = {
         "cache": OrderedDict(),
@@ -362,20 +366,15 @@ def main():
             "label_taxon",
             "a2t_taxon",
             "seqlen",
-            "lca_mapping",
+            "lca_counts",
         ]
         for accession, label_taxon, a2t_taxon, seqlen, lca_mapping in chunk[
             score_columns
         ].itertuples(index=False, name=None):
-            kmer_counts = cached_lca_mapping(
-                lca_mapping,
-                lca_mapping_cache,
-                args.lca_cache_size,
-            )
             metrics = distance_metrics(
                 tu=tu,
                 labeled_taxon=label_taxon,
-                kmer_counts=kmer_counts,
+                kmer_counts=lca_mapping,
                 topology_scale=topology_scales[label_taxon],
                 movement_cache=movement_cache,
                 movement_cache_size=args.movement_cache_size,

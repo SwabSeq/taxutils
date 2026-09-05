@@ -227,6 +227,9 @@ fn lookup_accession_taxids(
     keep_downloads: bool,
 ) -> PyResult<HashMap<String, i64>> {
     let requested = accessions.into_iter().collect::<HashSet<_>>();
+    if requested.is_empty() {
+        return Ok(HashMap::new());
+    }
     py.allow_threads(move || {
         if !low_memory {
             core::ensure_accession_database(
@@ -253,6 +256,9 @@ fn lookup_taxid_accessions(
     wgs: bool,
     keep_downloads: bool,
 ) -> PyResult<HashSet<String>> {
+    if taxa.is_empty() {
+        return Ok(HashSet::new());
+    }
     py.allow_threads(move || {
         if !low_memory {
             core::ensure_accession_database(

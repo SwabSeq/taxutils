@@ -152,6 +152,50 @@ class NativeBackendTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("requires its native Rust extension", result.stderr)
 
+    def test_low_memory_lookups_include_all_members_and_optional_wgs(self):
+        from taxutils import taxutils
+
+        self.write_accession_fixture()
+        wgs = self.root / "nucl_wgs.accession2taxid.gz"
+        try:
+            # A gzip member boundary is independent of the TSV header/rows.
+            with gzip.open(self.root / "nucl_gb.accession2taxid.gz", "at") as output:
+                output.write("NC_000003\tNC_000003.1\t13\t0\n")
+            with gzip.open(wgs, "wt") as output:
+                output.write("accession\taccession.version\ttaxid\tgi\n")
+                output.write("ABCD01000001\tABCD01000001.1\t13\t0\n")
+
+            tu = taxutils(low_memory=True, wgs=True)
+            queries = ["NC_000003.1", "ABCD01000001.1", "NC_999999.1"]
+            tu.load_a2t(queries)
+            self.assertEqual(tu.a2t, {"NC_000003.1": 13, "ABCD01000001.1": 13})
+            self.assertEqual(
+                tu.get_t2a([13, 13]),
+                {"NC_000001.1", "NC_000003.1", "ABCD01000001.1"},
+            )
+            tu.load_a2t(queries, wgs=False)
+            self.assertEqual(tu.a2t, {"NC_000003.1": 13})
+            self.assertEqual(tu.get_t2a([13], wgs=False), {"NC_000001.1", "NC_000003.1"})
+        finally:
+            wgs.unlink(missing_ok=True)
+            self.write_accession_fixture()
+
+    def test_empty_lookups_do_not_access_sources(self):
+        from taxutils.taxutils import build_a2t, get_t2a
+
+        # Invalid local WGS input fails if an empty query tries to scan or index
+        # it; keeping both source paths present also prevents network downloads.
+        wgs = self.root / "nucl_wgs.accession2taxid.gz"
+        wgs.write_bytes(b"not a gzip archive")
+        before = set(self.root.iterdir())
+        try:
+            for low_memory in (True, False):
+                self.assertEqual(build_a2t([], low_memory=low_memory, wgs=True), {})
+                self.assertEqual(get_t2a([], low_memory=low_memory, wgs=True), set())
+            self.assertEqual(set(self.root.iterdir()), before)
+        finally:
+            wgs.unlink()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -148,6 +148,10 @@ twice accidentally. Long native FASTA operations release the GIL and respond to
 `KeyboardInterrupt` between bounded batches; atomic-output commands discard
 their temporary output when cancelled.
 
+Editable installs also compile an optimized Rust extension. After updating the
+source, rerun `python -m pip install -e .` to rebuild it; an older debug extension
+can make large accession scans substantially slower.
+
 pandas/NumPy-returning taxonomy methods remain implemented in Python. This
 avoids converting already-efficient in-memory containers merely to cross the
 Python/Rust boundary; additional batch methods will only move behind the native
