@@ -7,6 +7,7 @@ __pycache__/
 dev/
 build/
 dist/
+benchmarks/
 rust/target/
 src/taxutils/_rust*.so
 src/taxutils/_rust*.pyd
