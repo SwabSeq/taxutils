@@ -7,6 +7,9 @@ __pycache__/
 dev/
 build/
 dist/
+rust/target/
+src/taxutils/_rust*.so
+src/taxutils/_rust*.pyd
 *.egg-info/
 .eggs/
 manuscript/

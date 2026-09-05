@@ -44,7 +44,7 @@ def aggregate_lca_mapping(lca_mapping):
 
 def main():
     args = parse_args()
-    tu = taxutils(low_memory=False)
+    tu = taxutils(low_memory=False, keep_accession_downloads=False)
 
     print("Processing Kraken output file...")
     out = pd.read_csv(

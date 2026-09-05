@@ -15,8 +15,9 @@ Set `TAXUTILS_GLOBALS` before importing `taxutils` whenever the cache location m
 import os
 os.environ["TAXUTILS_GLOBALS"] = "/path/to/taxutils/cache"
 
-from taxutils import taxutils
+from taxutils import backend_info, taxutils
 tu = taxutils()
+print(backend_info())
 ```
 
 If `TAXUTILS_GLOBALS` is not set, resources are stored under `./taxutils/` relative to the current working directory. Managed resources include `names.dmp`, `nodes.dmp`, `targets.json`, `nucl_gb.accession2taxid.gz`, optionally `nucl_wgs.accession2taxid.gz`, and optionally `nucl.accession2taxid.db`.
@@ -24,7 +25,14 @@ If `TAXUTILS_GLOBALS` is not set, resources are stored under `./taxutils/` relat
 Use:
 
 ```python
-tu = taxutils(accessions=None, low_memory=True, targets_json=None, rebuild=False, wgs=False)
+tu = taxutils(
+    accessions=None,
+    low_memory=True,
+    targets_json=None,
+    rebuild=False,
+    wgs=False,
+    keep_accession_downloads=True,
+)
 ```
 
 - `accessions`: optional accession/header list to load into `tu.a2t` during construction.
@@ -33,8 +41,63 @@ tu = taxutils(accessions=None, low_memory=True, targets_json=None, rebuild=False
 - `targets_json`: custom pathogen/target JSON path in place of the default downloaded target list.
 - `rebuild=True`: redownloads managed taxonomy/target/accession files and rebuilds the SQLite database.
 - `wgs=False`: default; uses `nucl_gb.accession2taxid.gz` only. Pass `wgs=True` to also download/use `nucl_wgs.accession2taxid.gz` for WGS/TSA accessions.
+- `keep_accession_downloads=True`: retain compressed NCBI inputs after an indexed database build. Set it to `False` for a SQLite-only cache to avoid keeping both representations.
 
 SQLite mode always uses `nucl.accession2taxid.db`; if it was built GB-only, a later `wgs=True` call upgrades the same DB with WGS mappings. Existing legacy DBs without source metadata are inferred from DB size.
+
+## Backend and Integration Strategy
+
+The native Rust extension is mandatory. Published Python wheels bundle it, and
+imports fail clearly if it is missing or exposes an incompatible API. There is
+no `TAXUTILS_BACKEND` mode switch and no pure-Python fallback. Use
+`backend_info()` for diagnostics:
+
+```python
+from taxutils import backend_info
+assert backend_info()["selected"] == "rust"
+```
+
+Source builds require a Rust toolchain but not a sibling repository checkout.
+The extension depends on `taxutils >=1.0.7,<2` from crates.io. Refresh
+`rust/Cargo.lock` after compatible crate releases so Python wheels inherit the
+new backend; do not copy the crate source into this repository.
+
+Call the public Python APIs. Do not import `taxutils._rust`, shell out to the
+`tu` executable from Python, or copy FASTA, accession lookup, download, or
+database-building implementations into custom scripts. The public wrappers
+provide compatibility checks, stable errors and return types, and the fastest
+maintained implementation without creating redundant code.
+
+Rust currently owns SQLite database construction, bulk accession lookups, and
+the extract/clean/grep/filter FASTA engines exclusively. Taxonomy methods that
+naturally operate on pandas or NumPy containers stay in Python so they do not
+pay unnecessary conversion costs.
+
+When adding a custom Python workflow, compose the public functions in this
+package and batch work across the Python/Rust boundary. Add a new public Rust
+crate API plus a thin PyO3/Python wrapper only when existing operations cannot
+express the workflow. Never add a second Python implementation as a fallback.
+When adding a custom Rust binary or script, depend on the `taxutils` crate and
+call its library APIs rather than invoking the `tu` CLI as a subprocess.
+
+## Choosing Lookup Mode and Disk Layout
+
+- Use `low_memory=True` for a one-off lookup, constrained storage, or workflows
+  that already retain the compressed NCBI mappings. Each lookup scans gzip
+  input.
+- Use `low_memory=False` for repeated lookups, reverse taxid-to-accession
+  queries, FASTA filtering, notebooks, and pipelines. The Rust backend builds
+  the shared SQLite index atomically and reuses it.
+- Use `keep_accession_downloads=False` with `low_memory=False` when a dedicated
+  cache will use only SQLite. The completed database can be reopened without
+  the gzip inputs. A later low-memory lookup or rebuild downloads them again.
+- Keep the default `True` when the same cache alternates between indexed and
+  low-memory workflows.
+- Set `wgs=True` only when WGS/TSA accessions are needed; it materially expands
+  download, build, and disk requirements.
+
+Build the indexed database once in a persistent `TAXUTILS_GLOBALS` directory
+and reuse that cache across scripts. Avoid `rebuild=True` in routine jobs.
 
 ## Core Object
 
@@ -42,7 +105,7 @@ The public constructor returns a `TaxonomicUtils` object:
 
 ```python
 from taxutils import taxutils
-tu = taxutils(low_memory=False)
+tu = taxutils(low_memory=False, keep_accession_downloads=False)
 ```
 
 Important members:
@@ -116,14 +179,34 @@ direct_accessions = tu.get_t2a([enterovirus])
 subtree_accessions = tu.get_t2a(tu.get_subtree(enterovirus))
 ```
 
-Prefer `low_memory=False` for repeated `load_a2t` or `get_t2a` calls in notebooks, pipelines, or scripts that can afford the SQLite database. Use default low-memory mode for one-off lookups or constrained disk environments.
+Prefer `low_memory=False` for repeated `load_a2t` or `get_t2a` calls in notebooks, pipelines, or scripts that can afford the SQLite database. Use default low-memory mode for one-off lookups or constrained disk environments. Pass deduplicated accessions in batches rather than calling `load_a2t` once per row.
 
 ## FASTA Workflows
+
+Call the package functions directly; each is a thin wrapper around the required
+Rust engine:
+
+```python
+from taxutils.clean_headers import clean_fasta_headers
+from taxutils.extract_headers import extract_accessions
+from taxutils.filter_fasta import filter_fasta
+from taxutils.grep_fasta import grep_fasta
+
+extract_accessions("input.fasta", "accessions.txt")
+clean_fasta_headers("input.fasta", "clean.fasta")
+grep_fasta("input.fasta", "NC_045512.2", "hits.fasta")
+filter_fasta("input.fasta", "viral.fasta", {2697049}, filter_mode="keep")
+```
+
+These functions already stream in bounded batches, preserve record order, and
+use atomic output where applicable. Do not recreate their record loops in
+examples or custom scripts unless the workflow needs genuinely different
+semantics.
 
 To create a two-column accession-to-taxid map for external tools:
 
 ```python
-tu = taxutils(low_memory=False)
+tu = taxutils(low_memory=False, keep_accession_downloads=False)
 
 seen = {}
 with open("input.fasta") as in_f:
@@ -267,12 +350,12 @@ For a custom target universe, pass `targets_json=` during construction or assign
 
 ## Kraken Read-Level Movement Analysis
 
-For Kraken read-level classification output, use `taxutils(low_memory=False)`, parse the accession column directly, and use the package target set:
+For Kraken read-level classification output, use indexed mode, parse the accession column directly, and use the package target set:
 
 ```python
 from taxutils import taxutils
 
-tu = taxutils(low_memory=False)
+tu = taxutils(low_memory=False, keep_accession_downloads=False)
 out = pd.read_csv(
     "kraken_output.tsv",
     sep="\t",
@@ -336,9 +419,49 @@ df = df[["pct", "cumulative_count", "count", "rank_code", "new_rank", "rank", "t
 
 Use `tu.get_lca(a, b)` to verify that reported taxa preserve expected hierarchy.
 
+## Native Rust Scripts
+
+When the custom program itself is Rust, depend on the `taxutils` crate and use
+its library API rather than invoking the CLI. Keeping a compatible semver range
+allows package updates to pick up backend improvements after the lockfile is
+refreshed.
+
+```toml
+[dependencies]
+taxutils = ">=1.0.7, <2"
+```
+
+For explicit database preparation:
+
+```rust
+use taxutils::{ensure_accession_database, AccessionDatabaseOptions};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let database = ensure_accession_database(
+        "/path/to/taxutils/cache",
+        AccessionDatabaseOptions {
+            wgs: false,
+            keep_downloads: false,
+            ..Default::default()
+        },
+    )?;
+    println!("{}", database.display());
+    Ok(())
+}
+```
+
+Use the crate's `lookup_accession_taxids`, `lookup_taxid_accessions`,
+`extract_accessions`, `clean_fasta_headers`, `grep_fasta`, and `filter_fasta`
+APIs for custom Rust workflows. Database construction and upgrades are built in
+a sibling temporary file and installed only after all rows and indexes are
+complete.
+
 ## Practical Guidance
 
 - Use `load_a2t` for accession subsets and `get_t2a` for selected taxon-to-accession lookups.
+- Check `backend_info()` when performance is operationally important.
+- Import public FASTA functions from their `taxutils.*` modules; never call the private native extension directly.
+- Deduplicate and batch accession lookups; avoid per-row database calls.
 - Keep accession versions when mapping against NCBI accession2taxid files; the package’s lookup key is `accession.version`.
 - Use `set.update(...)` when adding many branch or subtree taxa to a set.
 - Call `tu.sort_taxa(...)` after set operations whenever display order matters.

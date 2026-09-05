@@ -5,9 +5,10 @@ import numpy as np
 from collections import defaultdict
 from typing import List
 from dataclasses import dataclass
-import os, json, urllib.request, tarfile, gzip
+import os, json, urllib.request, tarfile
 import shutil
-import sqlite3
+
+from .backend import call_rust
 
 from .utils import (
     ACCESSION_PATTERN,
@@ -20,13 +21,6 @@ from .utils import (
 )
 
 logger = get_logger(__name__)
-
-A2T_BASE_URL = "https://ftp.ncbi.nih.gov/pub/taxonomy/accession2taxid"
-NUCL_GB_A2T_FILENAME = "nucl_gb.accession2taxid.gz"
-NUCL_WGS_A2T_FILENAME = "nucl_wgs.accession2taxid.gz"
-NUCL_A2T_DB_FILENAME = "nucl.accession2taxid.db"
-NUCL_A2T_WGS_DB_MIN_BYTES = 10_000_000_000
-
 
 def _download_file(url, path):
     tmp_path = f"{path}.tmp"
@@ -46,6 +40,7 @@ class TaxonomicUtils:
     parent: dict = None
     _low_memory: bool = True
     _wgs: bool = False
+    _keep_accession_downloads: bool = True
 
     def __post_init__(self):
         if self.parent is None:
@@ -112,6 +107,7 @@ class TaxonomicUtils:
             low_memory=low_memory,
             verbose=not self._a2t_checked,
             wgs=wgs,
+            keep_accession_downloads=self._keep_accession_downloads,
         )
         if extend:
             existing.update(self.a2t or {})
@@ -127,7 +123,12 @@ class TaxonomicUtils:
         return list(RANK_ORDER)
 
     def get_t2a(self, taxa, low_memory: bool = None, wgs: bool = None):
-        """Return accessions assigned to the provided taxa."""
+        """Return accessions assigned directly to the provided taxa.
+
+        By default, use the constructor's lookup mode. Pass low_memory=False
+        to use the indexed SQLite database; low_memory=True scans the entire
+        compressed accession mapping on every call, even for a single taxid.
+        """
         if low_memory is None:
             low_memory = self._low_memory
         if wgs is None:
@@ -137,6 +138,7 @@ class TaxonomicUtils:
             low_memory=low_memory,
             verbose=not self._a2t_checked,
             wgs=wgs,
+            keep_accession_downloads=self._keep_accession_downloads,
         )
         self._a2t_checked = True
         return accessions
@@ -575,6 +577,7 @@ def download_taxonomy(
     targets_json=None,
     rebuild: bool=False,
     wgs: bool=False,
+    keep_accession_downloads: bool=True,
 ) -> TaxonomicUtils:
     """Download/load taxonomy resources and return a TaxonomicUtils object."""
     save_path = TAXUTILS_GLOBALS["save_folder"]
@@ -628,10 +631,19 @@ def download_taxonomy(
     parent = build_parent(nodes)
     target_taxa = build_target_taxa(nodes, names, targets_json=targets_json)
     if rebuild or not low_memory:
-        _ensure_default_a2t_db(rebuild=rebuild, wgs=wgs)
+        _ensure_default_a2t_db(
+            rebuild=rebuild,
+            wgs=wgs,
+            keep_accession_downloads=keep_accession_downloads,
+        )
     a2t = None
     if accessions is not None:
-        a2t = build_a2t(accessions, low_memory=low_memory, wgs=wgs)
+        a2t = build_a2t(
+            accessions,
+            low_memory=low_memory,
+            wgs=wgs,
+            keep_accession_downloads=keep_accession_downloads,
+        )
         a2t[TAXUTILS_GLOBALS["UNCLASSIFIED"]] = "unclassified"
     names[2697049] = "SARS-CoV-2"
     names[694009] = "SARS-related-CoV"
@@ -643,6 +655,7 @@ def download_taxonomy(
         parent=parent,
         _low_memory=low_memory,
         _wgs=wgs,
+        _keep_accession_downloads=keep_accession_downloads,
     )
 
 
@@ -652,6 +665,7 @@ def taxutils(
     targets_json=None,
     rebuild: bool=False,
     wgs: bool=False,
+    keep_accession_downloads: bool=True,
 ) -> TaxonomicUtils:
     """Build and return a TaxonomicUtils object."""
     return download_taxonomy(
@@ -660,6 +674,7 @@ def taxutils(
         targets_json=targets_json,
         rebuild=rebuild,
         wgs=wgs,
+        keep_accession_downloads=keep_accession_downloads,
     )
 
     
@@ -797,249 +812,63 @@ def _rank_to_code(rank):
     return RANK_ALIASES[key]
 
 
-def _a2t_filenames(wgs=False):
-    filenames = [NUCL_GB_A2T_FILENAME]
-    if wgs:
-        filenames.append(NUCL_WGS_A2T_FILENAME)
-    return filenames
-
-
-def _a2t_db_path():
-    return os.path.join(TAXUTILS_GLOBALS["save_folder"], NUCL_A2T_DB_FILENAME)
-
-
-def _a2t_db_has_wgs(a2t_db):
-    return os.path.exists(a2t_db) and os.path.getsize(a2t_db) >= NUCL_A2T_WGS_DB_MIN_BYTES
-
-
-def _ensure_a2t_metadata(cur):
-    cur.execute("CREATE TABLE IF NOT EXISTS a2t_sources (source TEXT PRIMARY KEY, status TEXT)")
-
-
-def _loaded_a2t_sources(cur):
-    _ensure_a2t_metadata(cur)
-    rows = cur.execute("SELECT source, status FROM a2t_sources").fetchall()
-    return {source: status for source, status in rows}
-
-
-def _infer_legacy_a2t_sources(a2t_db):
-    sources = {NUCL_GB_A2T_FILENAME}
-    if _a2t_db_has_wgs(a2t_db):
-        sources.add(NUCL_WGS_A2T_FILENAME)
-    return sources
-
-
-def _record_a2t_sources(cur, sources, status):
-    for source in sources:
-        cur.execute(
-            "INSERT OR REPLACE INTO a2t_sources (source, status) VALUES (?, ?)",
-            (source, status),
+def _ensure_default_a2t_db(
+    verbose=True,
+    rebuild=False,
+    wgs=False,
+    keep_accession_downloads=True,
+):
+    del verbose  # Retained for compatibility; Rust owns database logging and I/O.
+    return os.fspath(
+        call_rust(
+            "ensure_accession_database",
+            os.fspath(TAXUTILS_GLOBALS["save_folder"]),
+            rebuild,
+            wgs,
+            keep_accession_downloads,
         )
+    )
 
-
-def _ensure_a2t_indexes(cur):
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_accession ON a2t (accession)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_taxid ON a2t (taxid)")
-
-
-def _drop_a2t_indexes(cur):
-    cur.execute("DROP INDEX IF EXISTS idx_accession")
-    cur.execute("DROP INDEX IF EXISTS idx_taxid")
-
-
-def _insert_a2t_gz(cur, gz_path):
-    with gzip.open(gz_path, "rt") as f:
-        header = next(f).strip().split("\t")
-        acc_idx = header.index("accession.version")
-        taxon_idx = header.index("taxid")
-        batch = []
-        for line in f:
-            parts = line.strip().split("\t")
-            batch.append((parts[acc_idx], int(parts[taxon_idx])))
-            if len(batch) == 100_000:
-                cur.executemany("INSERT INTO a2t VALUES (?, ?)", batch)
-                batch.clear()
-        if batch:
-            cur.executemany("INSERT INTO a2t VALUES (?, ?)", batch)
-
-
-def _build_a2t_db(gz_paths, a2t_db, verbose=True):
-    logger.info("Building SQLite db from gz file, this will take a while...")
-    tmp_db = f"{a2t_db}.tmp"
-    if os.path.exists(tmp_db):
-        os.remove(tmp_db)
-    try:
-        conn = sqlite3.connect(tmp_db)
-        cur = conn.cursor()
-        cur.execute("CREATE TABLE a2t (accession TEXT, taxid INTEGER)")
-        _ensure_a2t_metadata(cur)
-        for gz_path in gz_paths:
-            logger.info(f"Adding {os.path.basename(gz_path)} to SQLite db...")
-            _insert_a2t_gz(cur, gz_path)
-        _record_a2t_sources(cur, [os.path.basename(path) for path in gz_paths], "complete")
-        _ensure_a2t_indexes(cur)
-        conn.commit()
-        conn.close()
-        os.replace(tmp_db, a2t_db)
-    finally:
-        if os.path.exists(tmp_db):
-            os.remove(tmp_db)
-    logger.info("SQLite db built.")
-
-
-def _upgrade_a2t_db(a2t_db, gz_paths, loaded_sources, verbose=True):
-    missing_paths = [
-        path
-        for path in gz_paths
-        if loaded_sources.get(os.path.basename(path)) != "complete"
-    ]
-    if not missing_paths:
-        return
-
-    conn = sqlite3.connect(a2t_db)
-    try:
-        cur = conn.cursor()
-        _drop_a2t_indexes(cur)
-        _record_a2t_sources(cur, [os.path.basename(path) for path in missing_paths], "loading")
-        conn.commit()
-        for gz_path in missing_paths:
-            logger.info(f"Adding {os.path.basename(gz_path)} to SQLite db...")
-            _insert_a2t_gz(cur, gz_path)
-            _record_a2t_sources(cur, [os.path.basename(gz_path)], "complete")
-            conn.commit()
-        _ensure_a2t_indexes(cur)
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _ensure_a2t_db(gz_paths, a2t_db, verbose=True, rebuild=False, wgs=False):
-    """Build the SQLite a2t db from gz if it doesn't exist, ensuring both indexes exist."""
-    if isinstance(gz_paths, str):
-        gz_paths = [gz_paths]
-    if any(not os.path.exists(gz_path) for gz_path in gz_paths):
-        gz_paths = download_a2t_files(verbose=verbose, wgs=wgs)
-    if rebuild and os.path.exists(a2t_db):
-        os.remove(a2t_db)
-    if not os.path.exists(a2t_db):
-        _build_a2t_db(gz_paths, a2t_db, verbose=verbose)
-        return
-
-    conn = sqlite3.connect(a2t_db)
-    cur = conn.cursor()
-    sources = _loaded_a2t_sources(cur)
-    if not sources:
-        _record_a2t_sources(cur, _infer_legacy_a2t_sources(a2t_db), "complete")
-        sources = _loaded_a2t_sources(cur)
-    interrupted = any(status != "complete" for status in sources.values())
-    _ensure_a2t_indexes(cur)
-    conn.commit()
-    conn.close()
-
-    if interrupted:
-        logger.warning("Found an incomplete SQLite a2t update; rebuilding the database.")
-        os.remove(a2t_db)
-        _build_a2t_db(gz_paths, a2t_db, verbose=verbose)
-        return
-
-    if wgs and sources.get(NUCL_WGS_A2T_FILENAME) != "complete":
-        logger.info("SQLite db exists without WGS accessions; adding WGS accessions.")
-        _upgrade_a2t_db(a2t_db, gz_paths, sources, verbose=verbose)
-
-
-def _ensure_default_a2t_db(verbose=True, rebuild=False, wgs=False):
-    gz_paths = download_a2t_files(verbose=verbose, rebuild=rebuild, wgs=wgs)
-    a2t_db = _a2t_db_path()
-    _ensure_a2t_db(gz_paths, a2t_db, verbose=verbose, rebuild=rebuild, wgs=wgs)
-    return gz_paths, a2t_db
-
-def download_a2t(verbose=True, rebuild=False):
-    return _download_a2t_file(NUCL_GB_A2T_FILENAME, verbose=verbose, rebuild=rebuild)
-
-
-def download_a2t_files(verbose=True, rebuild=False, wgs=False):
-    return [
-        _download_a2t_file(filename, verbose=verbose, rebuild=rebuild)
-        for filename in _a2t_filenames(wgs=wgs)
-    ]
-
-
-def _download_a2t_file(filename, verbose=True, rebuild=False):
-    gz_path = os.path.join(TAXUTILS_GLOBALS["save_folder"], filename)
-    a2t_url = f"{A2T_BASE_URL}/{filename}"
-    if rebuild or not os.path.exists(gz_path):
-        os.makedirs(os.path.dirname(gz_path), exist_ok=True)
-        logger.info(f"Downloading {gz_path}...")
-        _download_file(a2t_url, gz_path)
-    else:
-        if verbose:
-            logger.info(f"{gz_path} already exists, skipping download.")
-
-    return gz_path
-
-def build_a2t(accessions, low_memory=True, verbose=True, wgs=False):
+def build_a2t(
+    accessions,
+    low_memory=True,
+    verbose=True,
+    wgs=False,
+    keep_accession_downloads=True,
+):
+    del verbose  # Retained for API compatibility.
     accessions = _accessions_for_lookup(accessions)
-
-    if low_memory:
-        gz_paths = download_a2t_files(verbose=verbose, wgs=wgs)
-        accession_set = set(accessions) if not isinstance(accessions, set) else accessions
-        a2t = {}
-        for gz_path in gz_paths:
-            with gzip.open(gz_path, 'rt') as f:
-                header = next(f).strip().split("\t")
-                acc_idx = header.index("accession.version")
-                taxon_idx = header.index("taxid")
-                for line in f:
-                    parts = line.strip().split("\t")
-                    if parts[acc_idx] in accession_set:
-                        a2t[parts[acc_idx]] = int(parts[taxon_idx])
-                        if len(a2t) == len(accession_set):
-                            break
-            if len(a2t) == len(accession_set):
-                break
-        return a2t
-
-    # SQLite path
-    _, a2t_db = _ensure_default_a2t_db(verbose=verbose, wgs=wgs)
-
-    conn = sqlite3.connect(a2t_db)
-    acc_df = pd.DataFrame({"accession": list(accessions)})
-    acc_df.to_sql("tmp_accs", conn, if_exists="replace", index=False)
-    result = pd.read_sql("SELECT t.accession, a.taxid FROM tmp_accs t JOIN a2t a ON t.accession = a.accession", conn)
-    conn.close()
-    return dict(zip(result["accession"], result["taxid"]))
+    return call_rust(
+        "lookup_accession_taxids",
+        os.fspath(TAXUTILS_GLOBALS["save_folder"]),
+        accessions,
+        low_memory,
+        wgs,
+        keep_accession_downloads,
+    )
 
 
-def get_t2a(taxa, low_memory=True, verbose=True, wgs=False):
+def get_t2a(
+    taxa,
+    low_memory=True,
+    verbose=True,
+    wgs=False,
+    keep_accession_downloads=True,
+):
     """Return the set of accessions belonging to the given taxa.
 
-    When low_memory=True, scans the compressed file directly.
-    When low_memory=False, uses a local SQLite database for speed.
+    Rust scans the compressed source directly in low-memory mode and uses the
+    indexed local SQLite database otherwise.
     """
-    if low_memory:
-        gz_paths = download_a2t_files(verbose=verbose, wgs=wgs)
-        taxon_set = {int(t) for t in taxa}
-        accessions = set()
-        for gz_path in gz_paths:
-            with gzip.open(gz_path, 'rt') as f:
-                header = next(f).strip().split("\t")
-                acc_idx = header.index("accession.version")
-                taxon_idx = header.index("taxid")
-                for line in f:
-                    parts = line.strip().split("\t")
-                    if int(parts[taxon_idx]) in taxon_set:
-                        accessions.add(parts[acc_idx])
-        return accessions
-
-    # SQLite path
-    _, a2t_db = _ensure_default_a2t_db(verbose=verbose, wgs=wgs)
-
-    conn = sqlite3.connect(a2t_db)
-    taxon_df = pd.DataFrame({"taxid": [int(t) for t in taxa]})
-    taxon_df.to_sql("tmp_taxa", conn, if_exists="replace", index=False)
-    result = pd.read_sql("SELECT accession FROM a2t JOIN tmp_taxa ON a2t.taxid = tmp_taxa.taxid", conn)
-    conn.close()
-    return set(result["accession"])
+    del verbose  # Retained for API compatibility.
+    return call_rust(
+        "lookup_taxid_accessions",
+        os.fspath(TAXUTILS_GLOBALS["save_folder"]),
+        [int(taxon) for taxon in taxa],
+        low_memory,
+        wgs,
+        keep_accession_downloads,
+    )
 
 def taxonomic_order(present, parent, rank, names):
     anc, stack = set(), list(present)

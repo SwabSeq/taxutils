@@ -324,7 +324,7 @@ def distance_metrics(
 
 def main():
     args = parse_args()
-    tu = taxutils(low_memory=False)
+    tu = taxutils(low_memory=False, keep_accession_downloads=False)
 
     results_dir = os.path.dirname(args.results)
     if results_dir:

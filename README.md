@@ -14,6 +14,22 @@ conda install bioconda::taxutils
 pip install taxutils
 ```
 
+`taxutils` requires its native Rust extension. Published wheels bundle the
+extension; there is no slower Python fallback for accession database or FASTA
+operations. An unsupported platform therefore fails at installation/import
+instead of silently changing performance or behavior.
+
+```python
+from taxutils import backend_info
+
+print(backend_info())
+# {'selected': 'rust', 'rust_version': '1.0.7', 'api_version': 2}
+```
+
+Building from a repository checkout or source distribution requires Rust. The
+extension resolves `taxutils` 1.0.7 or newer compatible releases directly from
+crates.io; a sibling `taxutils-rs` checkout is not required.
+
 # Setup
 
 `taxutils` stores downloaded taxonomy files (`names.dmp`, `nodes.dmp`), pathogen target metadata, and accession-to-taxon mappings in a global save directory. Set `TAXUTILS_GLOBALS` before importing the package if you want to control where these files live:
@@ -32,13 +48,29 @@ from taxutils import taxutils
 tu = taxutils(low_memory=False)
 ```
 
+Database construction is owned by `taxutils-rs`: it
+bulk-loads into a temporary SQLite database, builds the lookup indexes, and
+atomically installs the completed file. This keeps the Python wrapper and Rust
+CLI on one database implementation.
+
+The compressed NCBI mapping is retained by default because low-memory lookups
+scan it directly. If an installation will use only the SQLite database, remove
+that duplicate on-disk copy after a successful build with:
+
+```python
+tu = taxutils(low_memory=False, keep_accession_downloads=False)
+```
+
+The source will be downloaded again only if a later low-memory lookup or
+explicit rebuild needs it.
+
 # Core usage
 
 Core functions are listed here. See the example notebook for a fuller walkthrough.
 
 ```python
 # Build object
-tu = taxutils(accessions=None, low_memory=True, targets_json=None, rebuild=False, wgs=False)  # Build the taxonomy utility object.
+tu = taxutils(accessions=None, low_memory=True, targets_json=None, rebuild=False, wgs=False, keep_accession_downloads=True)  # Build the taxonomy utility object.
 
 # Accession parsing and mapping
 tu.parse_accession(header_strings, version=True)          # Extract one accession per string.
@@ -64,7 +96,7 @@ tu.get_rank_order()                                       # Return canonical ran
 tu.higher_than_rank(taxa, rank)                           # Test whether taxa are higher than a rank.
 ```
 
-In taxutils, `accessions=list/of/accessions` can be passed to call load_a2t on construction of the taxutils object. A custom targets_json can similarly be passed in lieu of the default json explained below. `rebuild=True` redownloads the managed taxonomy, target, and accession files and rebuilds the SQLite accession database. By default, accession lookups use `nucl_gb.accession2taxid.gz`; pass `wgs=True` to also download/use `nucl_wgs.accession2taxid.gz` for WGS/TSA accessions. SQLite mode always uses `nucl.accession2taxid.db`; if it was built GB-only, a later `wgs=True` call upgrades the same DB with WGS mappings. `load_a2t` overwrites `tu.a2t` by default; pass `extend=True` to add missing mappings without discarding existing ones. Method-level `low_memory=None` and `wgs=None` use the modes set when `tu` was built.
+In taxutils, `accessions=list/of/accessions` can be passed to call load_a2t on construction of the taxutils object. A custom targets_json can similarly be passed in lieu of the default json explained below. `rebuild=True` redownloads the managed taxonomy, target, and accession files and rebuilds the SQLite accession database. By default, accession lookups use `nucl_gb.accession2taxid.gz`; pass `wgs=True` to also download/use `nucl_wgs.accession2taxid.gz` for WGS/TSA accessions. SQLite mode always uses `nucl.accession2taxid.db`; if it was built GB-only, a later `wgs=True` call upgrades the same DB with WGS mappings. Pass `keep_accession_downloads=False` with SQLite mode to discard the compressed input after the database is installed. `load_a2t` overwrites `tu.a2t` by default; pass `extend=True` to add missing mappings without discarding existing ones. Method-level `low_memory=None` and `wgs=None` use the modes set when `tu` was built.
 
 `parse_accession` accepts strings, lists, arrays, and pandas Series. It returns the first accession found from each string using the same container type where possible; missing accessions are returned as `"NA"`.
 
@@ -104,6 +136,26 @@ Pass `stat` to return one topology metric. A single taxon returns a scalar; a li
 - `top_child_fraction`: fraction of the anchor subtree contained in its largest immediate child branch.
 
 `tu.target_taxa` contains the default pathogen-derived target taxa. Use it directly for target filtering or movement checks.
+
+# Rust acceleration
+
+The native backend comes from the
+[`taxutils` Rust crate](https://crates.io/crates/taxutils). It accelerates
+`load_a2t`, `get_t2a`, and the `extract`, `clean`, `grep`, and `filter` FASTA
+commands while preserving the Python APIs and return values. Runtime errors are
+not retried through Python, so a failed native file operation cannot be run
+twice accidentally. Long native FASTA operations release the GIL and respond to
+`KeyboardInterrupt` between bounded batches; atomic-output commands discard
+their temporary output when cancelled.
+
+pandas/NumPy-returning taxonomy methods remain implemented in Python. This
+avoids converting already-efficient in-memory containers merely to cross the
+Python/Rust boundary; additional batch methods will only move behind the native
+backend after container-specific benchmarks show a benefit.
+
+Run `python benchmarks/backend_benchmark.py` for native FASTA throughput or
+`python benchmarks/database_build_benchmark.py` for native SQLite construction
+throughput.
 
 # Rank correction
 
