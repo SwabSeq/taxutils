@@ -1,14 +1,17 @@
-"""Offline regression tests: python -m unittest discover -s examples -p 'test_quality_score.py'."""
+"""Offline regression tests: python -m unittest discover -s tests -p 'test_quality_score.py'."""
 
 import argparse
 from collections import OrderedDict
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "examples"))
 
 import quality_score as qs
 from taxutils.taxutils import TaxonomicUtils
