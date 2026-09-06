@@ -47,3 +47,4 @@ pathogen_dict.json
 .DS_Store
 .idea/
 .vscode/
+.cargo/

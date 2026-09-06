@@ -32,18 +32,22 @@ tu = taxutils(
     rebuild=False,
     wgs=False,
     keep_accession_downloads=True,
+    refresh=False,
 )
 ```
 
 - `accessions`: optional accession/header list to load into `tu.a2t` during construction.
 - `low_memory=True`: default; scans compressed accession2taxid files for requested lookups.
-- `low_memory=False`: builds/reuses a SQLite accession database for faster repeated lookup work. Expect a slow first build and large disk usage.
+- `low_memory=False`: builds/reuses a SQLite accession database for faster repeated lookup work. The first build is the expensive one; it decompresses the sources in parallel and merges them into the table in key order.
 - `targets_json`: custom pathogen/target JSON path in place of the default downloaded target list.
-- `rebuild=True`: redownloads managed taxonomy/target/accession files and rebuilds the SQLite database.
+- `rebuild=True`: redownloads managed taxonomy/target/accession files and rebuilds the SQLite database from scratch.
+- `refresh=True`: brings an existing SQLite database up to date instead of rebuilding it, applying only the accessions NCBI added, changed, or withdrew. Skips the work entirely when the sources are unchanged.
 - `wgs=False`: default; uses `nucl_gb.accession2taxid.gz` only. Pass `wgs=True` to also download/use `nucl_wgs.accession2taxid.gz` for WGS/TSA accessions.
 - `keep_accession_downloads=True`: retain compressed NCBI inputs after an indexed database build. Set it to `False` for a SQLite-only cache to avoid keeping both representations.
 
-SQLite mode always uses `nucl.accession2taxid.db`; if it was built GB-only, a later `wgs=True` call upgrades the same DB with WGS mappings. Existing legacy DBs without source metadata are inferred from DB size.
+SQLite mode always uses `nucl.accession2taxid.db`; if it was built GB-only, a later `wgs=True` call upgrades the same DB with WGS mappings. A database written before the current schema is detected and rebuilt once, automatically.
+
+Long backend calls are interruptible: `Ctrl-C` during a build or lookup raises `KeyboardInterrupt` promptly, discards the partial database, and leaves any installed database untouched.
 
 ## Backend and Integration Strategy
 
@@ -466,4 +470,4 @@ complete.
 - Use `set.update(...)` when adding many branch or subtree taxa to a set.
 - Call `tu.sort_taxa(...)` after set operations whenever display order matters.
 - Add `tu.nodes["name"] = tu.nodes["taxon"].map(tu.names)` before vectorized name searches or report tables.
-- Use `rebuild=True` only when intentionally refreshing downloaded taxonomy/accession/target resources.
+- Prefer `refresh=True` over `rebuild=True` to pick up new NCBI data; `rebuild=True` throws away a database that could have been updated in place.

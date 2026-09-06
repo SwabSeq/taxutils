@@ -48,10 +48,33 @@ from taxutils import taxutils
 tu = taxutils(low_memory=False)
 ```
 
-Database construction is owned by `taxutils-rs`: it
-bulk-loads into a temporary SQLite database, builds the lookup indexes, and
-atomically installs the completed file. This keeps the Python wrapper and Rust
-CLI on one database implementation.
+Database construction is owned by `taxutils-rs`. Both NCBI dumps are already
+sorted by accession, so they are decompressed in parallel and merged into one
+ascending stream that fills the table in key order. The table is keyed on the
+accession itself (`WITHOUT ROWID`), so there is no second copy of every
+accession to store or sort, and the taxid index is covering for reverse
+lookups. The result is assembled beside the destination and installed
+atomically only once every row and index is complete.
+
+Long backend calls are interruptible: `Ctrl-C` during a build or a lookup
+raises `KeyboardInterrupt` promptly, removes the partial database, and leaves
+any database already installed untouched.
+
+## Keeping the database current
+
+Passing `rebuild=True` discards the database and builds it again. To bring an
+existing one up to date instead, pass `refresh=True`:
+
+```python
+tu = taxutils(low_memory=False, wgs=True, refresh=True)
+```
+
+This asks NCBI whether each source has changed, and if so applies only the
+difference. Both the incoming dumps and the stored table are ordered by
+accession, so a single lockstep pass classifies every row as an insert, an
+update, or a deletion; accessions withdrawn upstream are removed. When the
+sources are unchanged, or the server cannot be reached, nothing is downloaded
+and the database is left alone.
 
 The compressed NCBI mapping is retained by default because low-memory lookups
 scan it directly. If an installation will use only the SQLite database, remove
@@ -70,7 +93,7 @@ Core functions are listed here. See the example notebook for a fuller walkthroug
 
 ```python
 # Build object
-tu = taxutils(accessions=None, low_memory=True, targets_json=None, rebuild=False, wgs=False, keep_accession_downloads=True)  # Build the taxonomy utility object.
+tu = taxutils(accessions=None, low_memory=True, targets_json=None, rebuild=False, wgs=False, keep_accession_downloads=True, refresh=False)  # Build the taxonomy utility object.
 
 # Accession parsing and mapping
 tu.parse_accession(header_strings, version=True)          # Extract one accession per string.
@@ -96,7 +119,7 @@ tu.get_rank_order()                                       # Return canonical ran
 tu.higher_than_rank(taxa, rank)                           # Test whether taxa are higher than a rank.
 ```
 
-In taxutils, `accessions=list/of/accessions` can be passed to call load_a2t on construction of the taxutils object. A custom targets_json can similarly be passed in lieu of the default json explained below. `rebuild=True` redownloads the managed taxonomy, target, and accession files and rebuilds the SQLite accession database. By default, accession lookups use `nucl_gb.accession2taxid.gz`; pass `wgs=True` to also download/use `nucl_wgs.accession2taxid.gz` for WGS/TSA accessions. SQLite mode always uses `nucl.accession2taxid.db`; if it was built GB-only, a later `wgs=True` call upgrades the same DB with WGS mappings. Pass `keep_accession_downloads=False` with SQLite mode to discard the compressed input after the database is installed. `load_a2t` overwrites `tu.a2t` by default; pass `extend=True` to add missing mappings without discarding existing ones. Method-level `low_memory=None` and `wgs=None` use the modes set when `tu` was built.
+In taxutils, `accessions=list/of/accessions` can be passed to call load_a2t on construction of the taxutils object. A custom targets_json can similarly be passed in lieu of the default json explained below. `rebuild=True` redownloads the managed taxonomy, target, and accession files and rebuilds the SQLite accession database from scratch; `refresh=True` instead updates an existing database in place, applying only the rows that changed upstream. By default, accession lookups use `nucl_gb.accession2taxid.gz`; pass `wgs=True` to also download/use `nucl_wgs.accession2taxid.gz` for WGS/TSA accessions. SQLite mode always uses `nucl.accession2taxid.db`; if it was built GB-only, a later `wgs=True` call upgrades the same DB with WGS mappings. Pass `keep_accession_downloads=False` with SQLite mode to discard the compressed input after the database is installed. `load_a2t` overwrites `tu.a2t` by default; pass `extend=True` to add missing mappings without discarding existing ones. Method-level `low_memory=None` and `wgs=None` use the modes set when `tu` was built.
 
 `parse_accession` accepts strings, lists, arrays, and pandas Series. It returns the first accession found from each string using the same container type where possible; missing accessions are returned as `"NA"`.
 

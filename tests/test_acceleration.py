@@ -46,7 +46,7 @@ class NativeBackendTests(unittest.TestCase):
 
         info = backend_info()
         self.assertEqual(info["selected"], "rust")
-        self.assertEqual(info["api_version"], 2)
+        self.assertEqual(info["api_version"], 3)
         self.assertEqual(
             set(info),
             {"selected", "rust_version", "api_version"},
@@ -109,7 +109,14 @@ class NativeBackendTests(unittest.TestCase):
                         "WHERE type = 'index' AND name LIKE 'idx_%'"
                     )
                 }
-            self.assertEqual(indexes, {"idx_accession", "idx_taxid"})
+            # `a2t` is keyed on the accession itself, so no separate
+            # accession index is built or stored.
+            self.assertEqual(indexes, {"idx_taxid"})
+            with sqlite3.connect(database) as connection:
+                table_sql = connection.execute(
+                    "SELECT sql FROM sqlite_master WHERE name = 'a2t'"
+                ).fetchone()[0]
+            self.assertIn("WITHOUT ROWID", table_sql)
         finally:
             database.unlink(missing_ok=True)
             self.write_accession_fixture()

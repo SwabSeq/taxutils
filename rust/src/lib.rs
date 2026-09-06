@@ -11,7 +11,7 @@ use pyo3::exceptions::{PyException, PyOSError, PyValueError};
 use pyo3::prelude::*;
 use taxutils_core::{self as core, CancellationToken, FilterMode};
 
-const BACKEND_API_VERSION: u32 = 2;
+const BACKEND_API_VERSION: u32 = 3;
 
 create_exception!(_rust, TaxutilsBackendError, PyException);
 
@@ -195,25 +195,27 @@ fn filter_fasta(
 }
 
 #[pyfunction]
-#[pyo3(signature = (save_folder, rebuild=false, wgs=false, keep_downloads=true))]
+#[pyo3(signature = (save_folder, rebuild=false, wgs=false, keep_downloads=true, refresh=false))]
 fn ensure_accession_database(
     py: Python<'_>,
     save_folder: PathBuf,
     rebuild: bool,
     wgs: bool,
     keep_downloads: bool,
+    refresh: bool,
 ) -> PyResult<PathBuf> {
-    py.allow_threads(move || {
-        core::ensure_accession_database(
+    interruptible(py, move |cancellation| {
+        core::ensure_accession_database_with_cancel(
             save_folder,
             core::AccessionDatabaseOptions {
                 rebuild,
+                refresh,
                 wgs,
                 keep_downloads,
             },
+            &cancellation,
         )
     })
-    .map_err(python_error)
 }
 
 #[pyfunction]
@@ -230,20 +232,26 @@ fn lookup_accession_taxids(
     if requested.is_empty() {
         return Ok(HashMap::new());
     }
-    py.allow_threads(move || {
+    interruptible(py, move |cancellation| {
         if !low_memory {
-            core::ensure_accession_database(
+            core::ensure_accession_database_with_cancel(
                 &save_folder,
                 core::AccessionDatabaseOptions {
                     wgs,
                     keep_downloads,
                     ..Default::default()
                 },
+                &cancellation,
             )?;
         }
-        core::lookup_accession_taxids(save_folder, requested, low_memory, wgs)
+        core::lookup_accession_taxids_with_cancel(
+            save_folder,
+            requested,
+            low_memory,
+            wgs,
+            &cancellation,
+        )
     })
-    .map_err(python_error)
 }
 
 #[pyfunction]
@@ -259,20 +267,26 @@ fn lookup_taxid_accessions(
     if taxa.is_empty() {
         return Ok(HashSet::new());
     }
-    py.allow_threads(move || {
+    interruptible(py, move |cancellation| {
         if !low_memory {
-            core::ensure_accession_database(
+            core::ensure_accession_database_with_cancel(
                 &save_folder,
                 core::AccessionDatabaseOptions {
                     wgs,
                     keep_downloads,
                     ..Default::default()
                 },
+                &cancellation,
             )?;
         }
-        core::lookup_taxid_accessions(save_folder, &taxa, low_memory, wgs)
+        core::lookup_taxid_accessions_with_cancel(
+            save_folder,
+            &taxa,
+            low_memory,
+            wgs,
+            &cancellation,
+        )
     })
-    .map_err(python_error)
 }
 
 #[pymodule]

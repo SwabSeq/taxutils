@@ -578,15 +578,22 @@ def download_taxonomy(
     rebuild: bool=False,
     wgs: bool=False,
     keep_accession_downloads: bool=True,
+    refresh: bool=False,
 ) -> TaxonomicUtils:
-    """Download/load taxonomy resources and return a TaxonomicUtils object."""
+    """Download/load taxonomy resources and return a TaxonomicUtils object.
+
+    ``rebuild`` discards the accession database and builds it again from
+    scratch. ``refresh`` instead asks NCBI whether the sources have changed and
+    applies only the difference, which is far cheaper for an index that is
+    already close to current.
+    """
     save_path = TAXUTILS_GLOBALS["save_folder"]
     os.makedirs(save_path, exist_ok=True)
 
     names_path = os.path.join(save_path, "names.dmp")
     nodes_path = os.path.join(save_path, "nodes.dmp")
 
-    if rebuild or not (os.path.exists(names_path) and os.path.exists(nodes_path)):
+    if rebuild or refresh or not (os.path.exists(names_path) and os.path.exists(nodes_path)):
         logger.info(f"Downloading {names_path}, {nodes_path}...")
         tarball_path = os.path.join(save_path, "taxdump.tar.gz")
         url = "https://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz"
@@ -615,7 +622,7 @@ def download_taxonomy(
 
     if targets_json is None:
         targets_json = os.path.join(save_path, "targets.json")
-        if rebuild or not os.path.exists(targets_json):
+        if rebuild or refresh or not os.path.exists(targets_json):
             for url in TAXUTILS_GLOBALS["pathogen_dict_urls"]:
                 try:
                     logger.info(f"Downloading targets.json from {url}...")
@@ -630,11 +637,12 @@ def download_taxonomy(
     nodes = build_nodes(nodes_path, names)
     parent = build_parent(nodes)
     target_taxa = build_target_taxa(nodes, names, targets_json=targets_json)
-    if rebuild or not low_memory:
+    if rebuild or refresh or not low_memory:
         _ensure_default_a2t_db(
             rebuild=rebuild,
             wgs=wgs,
             keep_accession_downloads=keep_accession_downloads,
+            refresh=refresh,
         )
     a2t = None
     if accessions is not None:
@@ -666,6 +674,7 @@ def taxutils(
     rebuild: bool=False,
     wgs: bool=False,
     keep_accession_downloads: bool=True,
+    refresh: bool=False,
 ) -> TaxonomicUtils:
     """Build and return a TaxonomicUtils object."""
     return download_taxonomy(
@@ -675,6 +684,7 @@ def taxutils(
         rebuild=rebuild,
         wgs=wgs,
         keep_accession_downloads=keep_accession_downloads,
+        refresh=refresh,
     )
 
     
@@ -817,6 +827,7 @@ def _ensure_default_a2t_db(
     rebuild=False,
     wgs=False,
     keep_accession_downloads=True,
+    refresh=False,
 ):
     del verbose  # Retained for compatibility; Rust owns database logging and I/O.
     return os.fspath(
@@ -826,6 +837,7 @@ def _ensure_default_a2t_db(
             rebuild,
             wgs,
             keep_accession_downloads,
+            refresh,
         )
     )
 

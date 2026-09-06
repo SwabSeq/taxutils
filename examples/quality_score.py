@@ -61,7 +61,7 @@ def parse_args():
         "--lca-cache-size",
         type=int,
         default=20_000,
-        help="Maximum parsed lca_mapping strings to cache. Use 0 to disable.",
+        help="Deprecated; accepted for compatibility but has no effect. Raw mappings are no longer cached.",
     )
     parser.add_argument(
         "--lca-fill-cache-size",
@@ -81,7 +81,8 @@ def parse_args():
 def aggregate_lca_mapping(lca_mapping):
     counts = {}
     for item in str(lca_mapping).split():
-        if ":" not in item:
+        # Kraken emits mate-pair and translated reading-frame boundaries.
+        if item in {"|:|", "-:-"} or ":" not in item:
             continue
         taxon, count = item.split(":", 1)
         taxon = -1 if taxon == "A" else int(taxon)
@@ -96,15 +97,6 @@ def _remember(cache, key, value, max_size):
     cache.move_to_end(key)
     while len(cache) > max_size:
         cache.popitem(last=False)
-
-
-def cached_lca_mapping(lca_mapping, cache, max_size):
-    if max_size > 0 and lca_mapping in cache:
-        cache.move_to_end(lca_mapping)
-        return cache[lca_mapping]
-    counts = aggregate_lca_mapping(lca_mapping)
-    _remember(cache, lca_mapping, counts, max_size)
-    return counts
 
 
 def infer_input_columns(path):
@@ -156,24 +148,26 @@ def read_label_chunks(path, tu, chunksize, verbose=False):
 
 
 def fill_lca_mappings(out, lca_fill_state, max_size):
-    out = out.copy()
+    """Parse mappings and fill missing rows using cached taxon counts."""
+    raw_mappings = out["lca_mapping"]
+    out = out.drop(columns="lca_mapping")
     cache = lca_fill_state["cache"]
     filled = []
     for accession, a2t_taxon, lca_mapping in zip(
         out["accession"],
         out["a2t_taxon"],
-        out["lca_mapping"],
+        raw_mappings,
     ):
         key = None if pd.isna(a2t_taxon) else (accession, int(a2t_taxon))
         if pd.notna(lca_mapping):
             lca_mapping = aggregate_lca_mapping(lca_mapping)
             lca_fill_state["last_key"] = key
-            lca_fill_state["last_lca_mapping"] = lca_mapping
+            lca_fill_state["last_lca_counts"] = lca_mapping
             if key is not None and max_size > 0:
                 _remember(cache, key, lca_mapping, max_size)
             filled.append(lca_mapping)
         elif key is not None and key == lca_fill_state["last_key"]:
-            filled.append(lca_fill_state["last_lca_mapping"])
+            filled.append(lca_fill_state["last_lca_counts"])
         elif max_size > 0 and key in cache:
             cache.move_to_end(key)
             filled.append(cache[key])
@@ -183,7 +177,6 @@ def fill_lca_mappings(out, lca_fill_state, max_size):
     # strings directly makes NumPy infer a fixed-width Unicode dtype and can
     # attempt an enormous temporary allocation for long Kraken mappings.
     out["lca_counts"] = pd.Series(filled, index=out.index, dtype=object)
-    out = out.drop(columns=["lca_mapping"])
     return out
 
 
@@ -340,7 +333,7 @@ def main():
     lca_fill_state = {
         "cache": OrderedDict(),
         "last_key": None,
-        "last_lca_mapping": pd.NA,
+        "last_lca_counts": pd.NA,
     }
     include_header = True
 
@@ -368,13 +361,13 @@ def main():
             "seqlen",
             "lca_counts",
         ]
-        for accession, label_taxon, a2t_taxon, seqlen, lca_mapping in chunk[
+        for accession, label_taxon, a2t_taxon, seqlen, lca_counts in chunk[
             score_columns
         ].itertuples(index=False, name=None):
             metrics = distance_metrics(
                 tu=tu,
                 labeled_taxon=label_taxon,
-                kmer_counts=lca_mapping,
+                kmer_counts=lca_counts,
                 topology_scale=topology_scales[label_taxon],
                 movement_cache=movement_cache,
                 movement_cache_size=args.movement_cache_size,
