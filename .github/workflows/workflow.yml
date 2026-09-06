@@ -86,6 +86,15 @@ jobs:
       - name: Build ABI3 wheels
         env:
           CIBW_BUILD: "cp310-*"
+          # The manylinux/musllinux images ship no Rust toolchain at all
+          # ("can't find Rust compiler"). 1.88+ is required by taxutils-core.
+          CIBW_BEFORE_ALL_LINUX: >-
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.90.0
+          CIBW_ENVIRONMENT_LINUX: 'PATH="$HOME/.cargo/bin:$PATH"'
+          # macos-latest is arm64; the x86_64 wheel is cross-compiled and needs
+          # the Intel std installed. 10.12 is Rust's floor for that target.
+          CIBW_BEFORE_ALL_MACOS: "rustup target add x86_64-apple-darwin aarch64-apple-darwin"
+          MACOSX_DEPLOYMENT_TARGET: "10.12"
           CIBW_ARCHS_LINUX: "x86_64 aarch64"
           CIBW_ARCHS_MACOS: "x86_64 arm64"
           CIBW_ARCHS_WINDOWS: "AMD64"
