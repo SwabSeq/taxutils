@@ -46,7 +46,7 @@ class NativeBackendTests(unittest.TestCase):
 
         info = backend_info()
         self.assertEqual(info["selected"], "rust")
-        self.assertEqual(info["api_version"], 3)
+        self.assertEqual(info["api_version"], 6)
         self.assertEqual(
             set(info),
             {"selected", "rust_version", "api_version"},
@@ -80,7 +80,7 @@ class NativeBackendTests(unittest.TestCase):
             ">NC_000001.1\nAA\n>NC_000002.1\nCC\n",
         )
 
-    def test_database_build_can_discard_compressed_source(self):
+    def test_database_build_retains_compressed_source(self):
         from taxutils import taxutils
 
         database = self.root / "nucl.accession2taxid.db"
@@ -88,18 +88,19 @@ class NativeBackendTests(unittest.TestCase):
         database.unlink(missing_ok=True)
         self.write_accession_fixture()
         try:
-            tu = taxutils(low_memory=False, keep_accession_downloads=False)
+            tu = taxutils(low_memory=False)
             self.assertTrue(database.exists())
-            self.assertFalse(source.exists())
+            # The compressed source is kept: low-memory lookups read it directly.
+            self.assertTrue(source.exists())
 
-            # Reusing the complete database must not redownload the discarded source.
+            # Reusing the complete database must not touch the network.
             tu.load_a2t(["NC_000001.1"])
             self.assertEqual(tu.a2t, {"NC_000001.1": 13})
             self.assertEqual(tu.get_t2a([13]), {"NC_000001.1"})
             self.assertEqual(tu.get_t2a([13, 13, 99999]), {"NC_000001.1"})
             self.assertEqual(tu.get_t2a([13, 15]), {"NC_000001.1", "NC_000002.1"})
             self.assertEqual(tu.get_t2a([99999]), set())
-            self.assertFalse(source.exists())
+            self.assertTrue(source.exists())
 
             with sqlite3.connect(database) as connection:
                 indexes = {

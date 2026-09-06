@@ -9,15 +9,19 @@ Use `taxutils` for local NCBI taxonomy workflows: parse accession IDs, map acces
 
 ## Import and Setup
 
-Set `TAXUTILS_GLOBALS` before importing `taxutils` whenever the cache location matters. The package reads this environment variable at import time.
+Pass `save_folder=` whenever the cache location matters. `TAXUTILS_GLOBALS` is the default when `save_folder` is not given, and is the only environment variable the package reads; it is read on each call, so setting it after import works.
 
 ```python
-import os
-os.environ["TAXUTILS_GLOBALS"] = "/path/to/taxutils/cache"
-
 from taxutils import backend_info, taxutils
-tu = taxutils()
+
+tu = taxutils(save_folder="/path/to/taxutils/cache")
 print(backend_info())
+```
+
+`threads` sets the worker count for every parallel stage, including the accession database build; `None` uses all logical CPUs.
+
+```python
+tu = taxutils(low_memory=False, threads=8)
 ```
 
 If `TAXUTILS_GLOBALS` is not set, resources are stored under `./taxutils/` relative to the current working directory. Managed resources include `names.dmp`, `nodes.dmp`, `targets.json`, `nucl_gb.accession2taxid.gz`, optionally `nucl_wgs.accession2taxid.gz`, and optionally `nucl.accession2taxid.db`.
@@ -29,9 +33,9 @@ tu = taxutils(
     accessions=None,
     low_memory=True,
     targets_json=None,
-    rebuild=False,
     wgs=False,
-    keep_accession_downloads=True,
+    save_folder=None,
+    threads=None,
     refresh=False,
 )
 ```
@@ -40,10 +44,8 @@ tu = taxutils(
 - `low_memory=True`: default; scans compressed accession2taxid files for requested lookups.
 - `low_memory=False`: builds/reuses a SQLite accession database for faster repeated lookup work. The first build is the expensive one; it decompresses the sources in parallel and merges them into the table in key order.
 - `targets_json`: custom pathogen/target JSON path in place of the default downloaded target list.
-- `rebuild=True`: redownloads managed taxonomy/target/accession files and rebuilds the SQLite database from scratch.
-- `refresh=True`: brings an existing SQLite database up to date instead of rebuilding it, applying only the accessions NCBI added, changed, or withdrew. Skips the work entirely when the sources are unchanged.
+- `refresh=True`: re-fetches the managed taxonomy/target files and brings an existing SQLite database up to date, applying only the accessions NCBI added, changed, or withdrew. Skips the work entirely when the sources are unchanged. There is no separate rebuild switch: anything missing is downloaded, and a missing or unreadable database is rebuilt automatically.
 - `wgs=False`: default; uses `nucl_gb.accession2taxid.gz` only. Pass `wgs=True` to also download/use `nucl_wgs.accession2taxid.gz` for WGS/TSA accessions.
-- `keep_accession_downloads=True`: retain compressed NCBI inputs after an indexed database build. Set it to `False` for a SQLite-only cache to avoid keeping both representations.
 
 SQLite mode always uses `nucl.accession2taxid.db`; if it was built GB-only, a later `wgs=True` call upgrades the same DB with WGS mappings. A database written before the current schema is detected and rebuilt once, automatically.
 
@@ -62,7 +64,7 @@ assert backend_info()["selected"] == "rust"
 ```
 
 Source builds require a Rust toolchain but not a sibling repository checkout.
-The extension depends on `taxutils >=1.0.7,<2` from crates.io. Refresh
+The extension depends on `taxutils >=1.1.1,<2` from crates.io. Refresh
 `rust/Cargo.lock` after compatible crate releases so Python wheels inherit the
 new backend; do not copy the crate source into this repository.
 
@@ -92,16 +94,15 @@ call its library APIs rather than invoking the `tu` CLI as a subprocess.
 - Use `low_memory=False` for repeated lookups, reverse taxid-to-accession
   queries, FASTA filtering, notebooks, and pipelines. The Rust backend builds
   the shared SQLite index atomically and reuses it.
-- Use `keep_accession_downloads=False` with `low_memory=False` when a dedicated
-  cache will use only SQLite. The completed database can be reopened without
-  the gzip inputs. A later low-memory lookup or rebuild downloads them again.
-- Keep the default `True` when the same cache alternates between indexed and
-  low-memory workflows.
+- The compressed NCBI inputs are always retained, because low-memory lookups
+  scan them directly. On a SQLite-only cache they can be deleted by hand to
+  reclaim the space; a later low-memory lookup downloads them again.
 - Set `wgs=True` only when WGS/TSA accessions are needed; it materially expands
   download, build, and disk requirements.
 
-Build the indexed database once in a persistent `TAXUTILS_GLOBALS` directory
-and reuse that cache across scripts. Avoid `rebuild=True` in routine jobs.
+Build the indexed database once in a persistent save folder and reuse that
+cache across scripts. Use `refresh=True` only when new NCBI data is wanted; a
+plain call reuses whatever is already installed without touching the network.
 
 ## Core Object
 
@@ -109,7 +110,7 @@ The public constructor returns a `TaxonomicUtils` object:
 
 ```python
 from taxutils import taxutils
-tu = taxutils(low_memory=False, keep_accession_downloads=False)
+tu = taxutils(low_memory=False)
 ```
 
 Important members:
@@ -210,7 +211,7 @@ semantics.
 To create a two-column accession-to-taxid map for external tools:
 
 ```python
-tu = taxutils(low_memory=False, keep_accession_downloads=False)
+tu = taxutils(low_memory=False)
 
 seen = {}
 with open("input.fasta") as in_f:
@@ -359,7 +360,7 @@ For Kraken read-level classification output, use indexed mode, parse the accessi
 ```python
 from taxutils import taxutils
 
-tu = taxutils(low_memory=False, keep_accession_downloads=False)
+tu = taxutils(low_memory=False)
 out = pd.read_csv(
     "kraken_output.tsv",
     sep="\t",
@@ -432,7 +433,7 @@ refreshed.
 
 ```toml
 [dependencies]
-taxutils = ">=1.0.7, <2"
+taxutils = ">=1.1.1, <2"
 ```
 
 For explicit database preparation:
@@ -470,4 +471,4 @@ complete.
 - Use `set.update(...)` when adding many branch or subtree taxa to a set.
 - Call `tu.sort_taxa(...)` after set operations whenever display order matters.
 - Add `tu.nodes["name"] = tu.nodes["taxon"].map(tu.names)` before vectorized name searches or report tables.
-- Prefer `refresh=True` over `rebuild=True` to pick up new NCBI data; `rebuild=True` throws away a database that could have been updated in place.
+- Use `refresh=True` to pick up new NCBI data; it updates the installed database in place instead of discarding it.

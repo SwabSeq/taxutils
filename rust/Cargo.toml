@@ -1,6 +1,6 @@
 [package]
 name = "taxutils-python"
-version = "0.1.0"
+version = "1.1.1"
 edition = "2021"
 publish = false
 
@@ -11,4 +11,4 @@ crate-type = ["cdylib"]
 [dependencies]
 anyhow = "1"
 pyo3 = { version = "0.23.5", features = ["abi3-py310", "extension-module"] }
-taxutils-core = { package = "taxutils", version = ">=1.1.0, <2" }
+taxutils-core = { package = "taxutils", version = ">=1.1.1, <2" }

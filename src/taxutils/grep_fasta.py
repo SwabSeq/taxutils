@@ -19,6 +19,12 @@ def parse_args(argv=None):
     parser.add_argument("--no-version", action="store_false", dest="version")
     parser.add_argument("--batch-size", type=int, default=1_000_000)
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="Worker threads to use. Defaults to all logical CPUs.",
+    )
     parser.set_defaults(version=True)
     return parser.parse_args(argv)
 
@@ -30,6 +36,7 @@ def grep_fasta(
     version=True,
     batch_size=1_000_000,
     verbose=False,
+    threads=None,
 ):
     if batch_size < 1:
         raise ValueError("--batch-size must be at least 1")
@@ -41,6 +48,7 @@ def grep_fasta(
         version,
         batch_size,
         verbose,
+        threads,
     )
     return {
         "requested": requested,
@@ -59,6 +67,7 @@ def main(argv=None):
         version=args.version,
         batch_size=args.batch_size,
         verbose=args.verbose,
+        threads=args.threads,
     )
     print(
         "Finished grepping FASTA: "

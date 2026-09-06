@@ -16,10 +16,16 @@ def parse_args(argv=None):
     parser.add_argument("fasta", help="Path to the input FASTA file.")
     parser.add_argument("-o", "--output", required=True)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="Worker threads to use. Defaults to all logical CPUs.",
+    )
     return parser.parse_args(argv)
 
 
-def extract_accessions(fasta_path, output_path, batch_size=DEFAULT_BATCH_SIZE):
+def extract_accessions(fasta_path, output_path, batch_size=DEFAULT_BATCH_SIZE, threads=None):
     if batch_size < 1:
         raise ValueError("--batch-size must be at least 1")
     return call_rust(
@@ -27,12 +33,15 @@ def extract_accessions(fasta_path, output_path, batch_size=DEFAULT_BATCH_SIZE):
         os.fspath(fasta_path),
         os.fspath(output_path),
         batch_size,
+        threads,
     )
 
 
 def main(argv=None):
     args = parse_args(argv)
-    count = extract_accessions(args.fasta, args.output, batch_size=args.batch_size)
+    count = extract_accessions(
+        args.fasta, args.output, batch_size=args.batch_size, threads=args.threads
+    )
     print(f"Wrote {count} accessions to {args.output}")
 
 

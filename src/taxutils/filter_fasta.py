@@ -2,7 +2,7 @@ import argparse
 import os
 
 from taxutils.backend import call_rust
-from taxutils.utils import TAXUTILS_GLOBALS
+from taxutils.utils import resolve_save_folder
 
 
 def parse_args(argv=None):
@@ -16,6 +16,17 @@ def parse_args(argv=None):
     taxa_group.add_argument("--remove-taxids")
     parser.add_argument("--batch-size", type=int, default=5_000)
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--save-folder",
+        default=None,
+        help="Taxonomy resource directory. Defaults to $TAXUTILS_GLOBALS.",
+    )
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="Worker threads to use. Defaults to all logical CPUs.",
+    )
     return parser.parse_args(argv)
 
 
@@ -52,6 +63,8 @@ def filter_fasta(
     filter_mode="remove",
     batch_size=5_000,
     verbose=False,
+    save_folder=None,
+    threads=None,
 ):
     if filter_mode not in {"keep", "remove"}:
         raise ValueError("filter_mode must be 'keep' or 'remove'")
@@ -63,11 +76,12 @@ def filter_fasta(
         os.fspath(input_path),
         os.fspath(output_path),
         [int(taxon) for taxon in filter_taxa],
-        os.fspath(TAXUTILS_GLOBALS["save_folder"]),
+        os.fspath(resolve_save_folder(save_folder)),
         filter_mode,
         batch_size,
         verbose,
         False,
+        threads,
     )
     return {
         "kept": kept,
@@ -93,6 +107,8 @@ def main(argv=None):
         filter_mode=filter_mode,
         batch_size=args.batch_size,
         verbose=args.verbose,
+        save_folder=args.save_folder,
+        threads=args.threads,
     )
     print(
         "Finished filtering FASTA: "

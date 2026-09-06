@@ -23,11 +23,11 @@ instead of silently changing performance or behavior.
 from taxutils import backend_info
 
 print(backend_info())
-# {'selected': 'rust', 'rust_version': '1.0.7', 'api_version': 2}
+# {'selected': 'rust', 'rust_version': '1.1.1', 'api_version': 6}
 ```
 
 Building from a repository checkout or source distribution requires Rust. The
-extension resolves `taxutils` 1.0.7 or newer compatible releases directly from
+extension resolves `taxutils` 1.1.1 or newer compatible releases directly from
 crates.io; a sibling `taxutils-rs` checkout is not required.
 
 # Setup
@@ -38,7 +38,27 @@ crates.io; a sibling `taxutils-rs` checkout is not required.
 export TAXUTILS_GLOBALS=/path/to/taxutils/saves
 ```
 
-If `TAXUTILS_GLOBALS` is not set, `taxutils` defaults to `./taxutils/` in the current working directory.
+If `TAXUTILS_GLOBALS` is not set, `taxutils` defaults to `./taxutils/` in the current working directory. It is the only environment variable `taxutils` reads, and it is only a default: `save_folder=` overrides it per call.
+
+```python
+tu = taxutils(save_folder="/path/to/taxutils/saves")
+```
+
+## Threads
+
+Every parallel stage — gzip decoding, the accession database build and refresh, and the FASTA commands — takes its worker count from a single `threads` argument. `threads=None` (the default) uses all logical CPUs.
+
+```python
+tu = taxutils(low_memory=False, threads=8)   # cap the database build at 8 workers
+```
+
+The FASTA commands take the same value as `--threads`:
+
+```bash
+taxutils filter -i in.fasta -o out.fasta --remove-taxids 9606 --threads 8
+```
+
+Each call builds its own thread pool, so the setting applies to that operation only and never to the host process. `RAYON_NUM_THREADS` is not consulted.
 
 The first run downloads NCBI taxonomy files. Accession lookups also use the NCBI accession-to-taxon mapping, which is large. By default, `taxutils` uses low-memory mode and scans the compressed mapping directly. For faster repeated lookups, use `low_memory=False` to build or reuse a local SQLite database:
 
@@ -62,8 +82,11 @@ any database already installed untouched.
 
 ## Keeping the database current
 
-Passing `rebuild=True` discards the database and builds it again. To bring an
-existing one up to date instead, pass `refresh=True`:
+Anything missing is downloaded and a missing or unusable database is built
+automatically, so a first run needs no flags. To pick up new NCBI data, pass
+`refresh=True`: it re-fetches the managed taxonomy files and applies only the
+accessions NCBI added, changed or withdrew, skipping the work entirely when the
+sources are unchanged.
 
 ```python
 tu = taxutils(low_memory=False, wgs=True, refresh=True)
@@ -76,16 +99,10 @@ update, or a deletion; accessions withdrawn upstream are removed. When the
 sources are unchanged, or the server cannot be reached, nothing is downloaded
 and the database is left alone.
 
-The compressed NCBI mapping is retained by default because low-memory lookups
-scan it directly. If an installation will use only the SQLite database, remove
-that duplicate on-disk copy after a successful build with:
-
-```python
-tu = taxutils(low_memory=False, keep_accession_downloads=False)
-```
-
-The source will be downloaded again only if a later low-memory lookup or
-explicit rebuild needs it.
+The compressed NCBI mapping is always retained, because low-memory lookups scan
+it directly. If an installation will only ever use the SQLite database, the
+`.accession2taxid.gz` files can simply be deleted to reclaim the space; they are
+downloaded again only if a later low-memory lookup needs them.
 
 # Core usage
 
@@ -93,7 +110,7 @@ Core functions are listed here. See the example notebook for a fuller walkthroug
 
 ```python
 # Build object
-tu = taxutils(accessions=None, low_memory=True, targets_json=None, rebuild=False, wgs=False, keep_accession_downloads=True, refresh=False)  # Build the taxonomy utility object.
+tu = taxutils(accessions=None, low_memory=True, targets_json=None, wgs=False, save_folder=None, threads=None, refresh=False)  # Build the taxonomy utility object.
 
 # Accession parsing and mapping
 tu.parse_accession(header_strings, version=True)          # Extract one accession per string.
@@ -119,7 +136,7 @@ tu.get_rank_order()                                       # Return canonical ran
 tu.higher_than_rank(taxa, rank)                           # Test whether taxa are higher than a rank.
 ```
 
-In taxutils, `accessions=list/of/accessions` can be passed to call load_a2t on construction of the taxutils object. A custom targets_json can similarly be passed in lieu of the default json explained below. `rebuild=True` redownloads the managed taxonomy, target, and accession files and rebuilds the SQLite accession database from scratch; `refresh=True` instead updates an existing database in place, applying only the rows that changed upstream. By default, accession lookups use `nucl_gb.accession2taxid.gz`; pass `wgs=True` to also download/use `nucl_wgs.accession2taxid.gz` for WGS/TSA accessions. SQLite mode always uses `nucl.accession2taxid.db`; if it was built GB-only, a later `wgs=True` call upgrades the same DB with WGS mappings. Pass `keep_accession_downloads=False` with SQLite mode to discard the compressed input after the database is installed. `load_a2t` overwrites `tu.a2t` by default; pass `extend=True` to add missing mappings without discarding existing ones. Method-level `low_memory=None` and `wgs=None` use the modes set when `tu` was built.
+In taxutils, `accessions=list/of/accessions` can be passed to call load_a2t on construction of the taxutils object. A custom targets_json can similarly be passed in lieu of the default json explained below. A missing or unusable database is built from scratch automatically; `refresh=True` re-fetches the managed taxonomy files and updates an existing database in place, applying only the rows that changed upstream. By default, accession lookups use `nucl_gb.accession2taxid.gz`; pass `wgs=True` to also download/use `nucl_wgs.accession2taxid.gz` for WGS/TSA accessions. SQLite mode always uses `nucl.accession2taxid.db`; if it was built GB-only, a later `wgs=True` call upgrades the same DB with WGS mappings. `load_a2t` overwrites `tu.a2t` by default; pass `extend=True` to add missing mappings without discarding existing ones. Method-level `low_memory=None` and `wgs=None` use the modes set when `tu` was built. `save_folder` and `threads` are recorded on `tu` and reused by every later lookup.
 
 `parse_accession` accepts strings, lists, arrays, and pandas Series. It returns the first accession found from each string using the same container type where possible; missing accessions are returned as `"NA"`.
 

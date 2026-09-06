@@ -11,7 +11,7 @@ use pyo3::exceptions::{PyException, PyOSError, PyValueError};
 use pyo3::prelude::*;
 use taxutils_core::{self as core, CancellationToken, FilterMode};
 
-const BACKEND_API_VERSION: u32 = 3;
+const BACKEND_API_VERSION: u32 = 6;
 
 create_exception!(_rust, TaxutilsBackendError, PyException);
 
@@ -89,38 +89,48 @@ fn crate_version() -> &'static str {
 }
 
 #[pyfunction]
-#[pyo3(signature = (fasta_path, output_path, batch_size=10_000))]
+#[pyo3(signature = (fasta_path, output_path, batch_size=10_000, threads=None))]
 fn extract_accessions(
     py: Python<'_>,
     fasta_path: PathBuf,
     output_path: PathBuf,
     batch_size: usize,
+    threads: Option<usize>,
 ) -> PyResult<usize> {
     interruptible(py, move |cancellation| {
-        core::extract_accessions_with_cancel(fasta_path, output_path, batch_size, &cancellation)
-    })
-}
-
-#[pyfunction]
-#[pyo3(signature = (input_path, output_path=None, verbose=false))]
-fn clean_fasta_headers(
-    py: Python<'_>,
-    input_path: PathBuf,
-    output_path: Option<PathBuf>,
-    verbose: bool,
-) -> PyResult<()> {
-    interruptible(py, move |cancellation| {
-        core::clean_fasta_headers_with_cancel(
-            input_path,
-            output_path.as_deref(),
-            verbose,
+        core::extract_accessions_with_cancel(
+            fasta_path,
+            output_path,
+            batch_size,
+            threads,
             &cancellation,
         )
     })
 }
 
 #[pyfunction]
-#[pyo3(signature = (input_path, accession_query, output_path, version=true, batch_size=1_000_000, verbose=false))]
+#[pyo3(signature = (input_path, output_path=None, verbose=false, threads=None))]
+fn clean_fasta_headers(
+    py: Python<'_>,
+    input_path: PathBuf,
+    output_path: Option<PathBuf>,
+    verbose: bool,
+    threads: Option<usize>,
+) -> PyResult<()> {
+    interruptible(py, move |cancellation| {
+        core::clean_fasta_headers_with_cancel(
+            input_path,
+            output_path.as_deref(),
+            verbose,
+            threads,
+            &cancellation,
+        )
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (input_path, accession_query, output_path, version=true, batch_size=1_000_000, verbose=false, threads=None))]
+#[allow(clippy::too_many_arguments)]
 fn grep_fasta(
     py: Python<'_>,
     input_path: PathBuf,
@@ -129,6 +139,7 @@ fn grep_fasta(
     version: bool,
     batch_size: usize,
     verbose: bool,
+    threads: Option<usize>,
 ) -> PyResult<(usize, usize, usize, usize)> {
     let stats = interruptible(py, move |cancellation| {
         core::grep_fasta_with_cancel(
@@ -138,6 +149,7 @@ fn grep_fasta(
             version,
             batch_size,
             verbose,
+            threads,
             &cancellation,
         )
     })?;
@@ -150,7 +162,7 @@ fn grep_fasta(
 }
 
 #[pyfunction]
-#[pyo3(signature = (input_path, output_path, filter_taxa, save_folder, filter_mode="remove", batch_size=5_000, verbose=false, wgs=false))]
+#[pyo3(signature = (input_path, output_path, filter_taxa, save_folder, filter_mode="remove", batch_size=5_000, verbose=false, wgs=false, threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn filter_fasta(
     py: Python<'_>,
@@ -162,6 +174,7 @@ fn filter_fasta(
     batch_size: usize,
     verbose: bool,
     wgs: bool,
+    threads: Option<usize>,
 ) -> PyResult<(usize, usize, usize, usize)> {
     let mode = match filter_mode {
         "keep" => FilterMode::Keep,
@@ -183,6 +196,7 @@ fn filter_fasta(
             verbose,
             save_folder,
             wgs,
+            threads,
             &cancellation,
         )
     })?;
@@ -195,23 +209,21 @@ fn filter_fasta(
 }
 
 #[pyfunction]
-#[pyo3(signature = (save_folder, rebuild=false, wgs=false, keep_downloads=true, refresh=false))]
+#[pyo3(signature = (save_folder, wgs=false, refresh=false, threads=None))]
 fn ensure_accession_database(
     py: Python<'_>,
     save_folder: PathBuf,
-    rebuild: bool,
     wgs: bool,
-    keep_downloads: bool,
     refresh: bool,
+    threads: Option<usize>,
 ) -> PyResult<PathBuf> {
     interruptible(py, move |cancellation| {
         core::ensure_accession_database_with_cancel(
             save_folder,
             core::AccessionDatabaseOptions {
-                rebuild,
                 refresh,
                 wgs,
-                keep_downloads,
+                threads,
             },
             &cancellation,
         )
@@ -219,14 +231,14 @@ fn ensure_accession_database(
 }
 
 #[pyfunction]
-#[pyo3(signature = (save_folder, accessions, low_memory, wgs, keep_downloads=true))]
+#[pyo3(signature = (save_folder, accessions, low_memory, wgs, threads=None))]
 fn lookup_accession_taxids(
     py: Python<'_>,
     save_folder: PathBuf,
     accessions: Vec<String>,
     low_memory: bool,
     wgs: bool,
-    keep_downloads: bool,
+    threads: Option<usize>,
 ) -> PyResult<HashMap<String, i64>> {
     let requested = accessions.into_iter().collect::<HashSet<_>>();
     if requested.is_empty() {
@@ -238,7 +250,7 @@ fn lookup_accession_taxids(
                 &save_folder,
                 core::AccessionDatabaseOptions {
                     wgs,
-                    keep_downloads,
+                    threads,
                     ..Default::default()
                 },
                 &cancellation,
@@ -249,20 +261,21 @@ fn lookup_accession_taxids(
             requested,
             low_memory,
             wgs,
+            threads,
             &cancellation,
         )
     })
 }
 
 #[pyfunction]
-#[pyo3(signature = (save_folder, taxa, low_memory, wgs, keep_downloads=true))]
+#[pyo3(signature = (save_folder, taxa, low_memory, wgs, threads=None))]
 fn lookup_taxid_accessions(
     py: Python<'_>,
     save_folder: PathBuf,
     taxa: Vec<i64>,
     low_memory: bool,
     wgs: bool,
-    keep_downloads: bool,
+    threads: Option<usize>,
 ) -> PyResult<HashSet<String>> {
     if taxa.is_empty() {
         return Ok(HashSet::new());
@@ -273,7 +286,7 @@ fn lookup_taxid_accessions(
                 &save_folder,
                 core::AccessionDatabaseOptions {
                     wgs,
-                    keep_downloads,
+                    threads,
                     ..Default::default()
                 },
                 &cancellation,
@@ -284,6 +297,7 @@ fn lookup_taxid_accessions(
             &taxa,
             low_memory,
             wgs,
+            threads,
             &cancellation,
         )
     })
