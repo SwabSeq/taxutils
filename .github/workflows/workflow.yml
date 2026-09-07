@@ -81,7 +81,7 @@ jobs:
 
       - name: Enable Linux cross-architecture builds
         if: runner.os == 'Linux'
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Build ABI3 wheels
         env:
