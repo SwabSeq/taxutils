@@ -1,6 +1,9 @@
 import argparse
+from pathlib import Path
+import tempfile
 
 from taxutils import taxutils
+from taxutils.extract_headers import extract_accessions as extract_fasta_accessions
 
 
 BUFFER_SIZE = 1_000_000
@@ -22,44 +25,14 @@ def parse_args():
         required=True,
         help="Path to output accession-to-taxon map.",
     )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Print FASTA headers where no accession is found.",
-    )
     return parser.parse_args()
 
 
-def iter_header_lines(fasta_path):
-    with open(fasta_path, "rb", buffering=BUFFER_SIZE) as f:
-        for line in f:
-            if line.startswith(b">"):
-                yield line.decode("utf-8", errors="ignore")
-
-
-def extract_accessions(fasta_path, tu, verbose=False):
-    accessions = {}
-    headers = []
-    headers_size = 0
-
-    def add_headers():
-        nonlocal headers, headers_size
-        if headers:
-            for header, accession in zip(headers, tu.parse_accession(headers)):
-                if accession != "NA":
-                    accessions.setdefault(accession, None)
-                elif verbose:
-                    print(f"NA accession: {header.strip()}")
-            headers = []
-            headers_size = 0
-
-    for header in iter_header_lines(fasta_path):
-        headers.append(header)
-        headers_size += len(header)
-        if headers_size >= BUFFER_SIZE:
-            add_headers()
-    add_headers()
-    return list(accessions)
+def extract_accessions(fasta_path):
+    with tempfile.TemporaryDirectory() as temporary:
+        extracted = Path(temporary) / "accessions.txt"
+        extract_fasta_accessions(fasta_path, extracted)
+        return list(dict.fromkeys(extracted.read_text().splitlines()))
 
 
 def write_taxid_map(accessions, output_path, tu):
@@ -86,16 +59,16 @@ def write_taxid_map(accessions, output_path, tu):
         flush(f)
 
 
-def build_taxid_map(input_path, output_path, verbose=False):
-    tu = taxutils(low_memory=False)
-    accessions = extract_accessions(input_path, tu, verbose=verbose)
+def build_taxid_map(input_path, output_path):
+    tu = taxutils(low_memory=False, keep_accession_downloads=False)
+    accessions = extract_accessions(input_path)
     write_taxid_map(accessions, output_path, tu)
     return output_path
 
 
 def main():
     args = parse_args()
-    build_taxid_map(args.input, args.output, verbose=args.verbose)
+    build_taxid_map(args.input, args.output)
 
 
 if __name__ == "__main__":

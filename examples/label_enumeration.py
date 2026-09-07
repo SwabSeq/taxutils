@@ -54,7 +54,7 @@ def candidate_taxa(lca_mapping, min_count=1):
 
 
 def enumerate_labels(df, keep_original=True, min_count=1):
-    tu = taxutils(low_memory=False)
+    tu = taxutils(low_memory=False, keep_accession_downloads=False)
     df = df.copy()
     df["accession"] = tu.parse_accession(df["accession"])
     df = df[df["accession"] != "NA"].copy()

@@ -1,14 +1,23 @@
-# global_utils.py
+"""Constants and small shared helpers.
 
+`TAXUTILS_GLOBALS` is the one environment variable this package reads: it names
+the directory holding `names.dmp`, `nodes.dmp`, `targets.json` and the accession
+database. Everything else is passed as an argument.
+"""
+
+import logging
 import os
 import re
 
-TAXUTILS_GLOBALS = dict()
-TAXUTILS_GLOBALS["save_folder"] = os.path.expanduser(os.environ.get("TAXUTILS_GLOBALS", "./taxutils/"))
-TAXUTILS_GLOBALS["pathogen_dict_urls"] = [
+# Taxid reserved for reads with no assignment.
+UNCLASSIFIED = 0
+
+# Where taxonomy resources are downloaded to when a caller does not say.
+DEFAULT_SAVE_FOLDER = "./taxutils/"
+
+PATHOGEN_DICT_URLS = [
     "https://web.cs.ucla.edu/~wob/projects/taxutils/targets.json",
 ]
-TAXUTILS_GLOBALS["UNCLASSIFIED"] = 0
 
 RANK_ORDER = {"U": 0, "R": 1, "D": 2, "K": 3, "P": 4, "C": 5, "O": 6, "F": 7, "G": 8, "S": 9}
 CANONICAL_RANK_NAMES = {
@@ -76,8 +85,24 @@ ACCESSION_PATTERN = re.compile(
     r")(?:\.([0-9]+))?(?![A-Za-z0-9_])"
 )
 
+
+def default_save_folder():
+    """Return the save directory named by TAXUTILS_GLOBALS, or the default.
+
+    Read on each call rather than cached at import, so setting the variable
+    after importing the package still takes effect.
+    """
+    return os.path.expanduser(os.environ.get("TAXUTILS_GLOBALS", DEFAULT_SAVE_FOLDER))
+
+
+def resolve_save_folder(save_folder=None):
+    """Return an explicit save folder, falling back to the environment."""
+    if save_folder is None:
+        return default_save_folder()
+    return os.path.expanduser(os.fspath(save_folder))
+
+
 def get_logger(name):
-    import logging
     logger = logging.getLogger(name)
     logging.basicConfig(
         format="%(asctime)s | %(levelname)s : %(message)s",
