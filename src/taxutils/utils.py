@@ -1,10 +1,3 @@
-"""Constants and small shared helpers.
-
-`TAXUTILS_GLOBALS` is the one environment variable this package reads: it names
-the directory holding `names.dmp`, `nodes.dmp`, `targets.json` and the accession
-database. Everything else is passed as an argument.
-"""
-
 import logging
 import os
 import re
