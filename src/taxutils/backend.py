@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 
-BACKEND_API_VERSION = 6
+BACKEND_API_VERSION = 8
 
 
 class TaxutilsBackendError(RuntimeError):

@@ -6,6 +6,10 @@ import sys
 
 
 COMMANDS = {
+    "deduplicate": (
+        "Keep the first FASTA record per accession (including version).",
+        "taxutils.deduplicate_fasta",
+    ),
     "extract": (
         "Extract one accession per FASTA header.",
         "taxutils.extract_headers",
@@ -23,11 +27,13 @@ COMMANDS = {
         "taxutils.filter_fasta",
     ),
 }
+COMMANDS = dict(sorted(COMMANDS.items()))
 
 
 def build_parser():
+    command_width = max(map(len, COMMANDS)) + 2
     command_help = "\n".join(
-        f"  {name:<8}{description}"
+        f"  {name:<{command_width}}{description}"
         for name, (description, _) in COMMANDS.items()
     )
     parser = argparse.ArgumentParser(
@@ -35,7 +41,7 @@ def build_parser():
         description="Utilities for working with taxonomy data and FASTA files.",
         epilog=f"commands:\n{command_help}",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        usage="taxutils [-h] {extract,clean,grep,filter} ...",
+        usage="taxutils [-h] {" + ",".join(COMMANDS) + "} ...",
     )
     parser.add_argument(
         "command",

@@ -1,5 +1,23 @@
 # taxutils
 
+### Deduplicate FASTA records
+
+```sh
+taxutils deduplicate -i input.fasta -o unique.fasta
+taxutils deduplicate -i input.fasta  # atomic in-place rewrite
+```
+
+The Rust CLI exposes the same command as `tu deduplicate`. It keeps the first
+record for each parsed accession, including its version, preserving the original
+record bytes and order. Later records with that accession are removed even if
+their sequences differ. Identical sequences with different accessions remain.
+Headers without a parseable accession cause an error and leave the destination
+untouched. No taxonomy downloads are needed.
+
+Python callers can use
+`taxutils.deduplicate_fasta.deduplicate_fasta(input_path, output_path=None)`,
+which returns `{"kept": ..., "removed": ...}`.
+
 Utilities for working with NCBI taxonomic data, accession-to-taxon mappings, taxonomy branches, corrected ranks, and pathogen target taxa.
 
 # Install
@@ -23,11 +41,11 @@ instead of silently changing performance or behavior.
 from taxutils import backend_info
 
 print(backend_info())
-# {'selected': 'rust', 'rust_version': '1.1.1', 'api_version': 6}
+# {'selected': 'rust', 'rust_version': '1.1.2', 'api_version': 8}
 ```
 
 Building from a repository checkout or source distribution requires Rust. The
-extension resolves `taxutils` 1.1.1 or newer compatible releases directly from
+extension resolves `taxutils` 1.1.2 or newer compatible releases directly from
 crates.io; a sibling `taxutils-rs` checkout is not required.
 
 # Setup
@@ -110,7 +128,7 @@ Core functions are listed here. See the example notebook for a fuller walkthroug
 
 ```python
 # Build object
-tu = taxutils(accessions=None, low_memory=True, targets_json=None, wgs=False, save_folder=None, threads=None, refresh=False)  # Build the taxonomy utility object.
+tu = taxutils(accessions=None, low_memory=True, targets_json=None, wgs=False, save_folder=None, threads=None, refresh=False, canonical=True)  # Build the taxonomy utility object.
 
 # Accession parsing and mapping
 tu.parse_accession(header_strings, version=True)          # Extract one accession per string.
@@ -214,3 +232,42 @@ In ZarLab, we are working on metagenomics in the clinical setting, with the goal
 Author: Will O'Brien  
 Affiliation: Computer Science Department, UCLA  
 Email: wob@cs.ucla.edu
+
+
+### Alternative viral accession mappings
+
+```python
+tu = taxutils(canonical=False, low_memory=False, threads=8)
+tu.load_a2t(accessions)
+```
+
+`canonical=True` (the default) preserves NCBI accession assignments. With
+`canonical=False`, Rust matches influenza A strains first, then H/N genotypes,
+then falls back to the NCBI mapping. Strain matches remain eligible when genotype
+is missing. Constructor accession lookups, `load_a2t`, and `get_t2a` all use this
+policy; reverse lookups remove accessions from their former assignments. Strain
+and subtype parsing is internal and adds no columns to `tu.nodes`.
+
+The first alternative-mode initialization downloads NCBI AllNuclMetadata and
+streams only accession, genotype, and strain into `viral.metadata.csv.gz` in the
+save folder. Canonical-only users do not need this download. Once present,
+`refresh=True` refreshes it alongside taxonomy resources. An unavailable or
+malformed alternative resource raises an error; an individual unmatched record
+uses its NCBI assignment.
+
+Indexed mode stores only differing assignments (plus successful matches absent
+from NCBI accession mappings) in `a2t_overrides`, with a taxid index for reverse
+queries. It shares the existing database without rewriting canonical rows.
+Metadata, taxonomy, or canonical-source changes invalidate the derived table.
+No source labels or redundant fallback values are stored.
+
+Low-memory mode creates no database. Forward lookup scans the trimmed gzip for
+requested accessions. Reverse lookup uses two metadata passes to find candidate
+accessions and resolve duplicate priorities without retaining every override.
+Rust caches private taxonomy matching dictionaries and processes bounded batches
+using the configured `threads`. Gzip scanning still has a sequential component;
+more workers are not guaranteed to improve small queries.
+
+`examples/benchmark_alternative_mappings.py` measures synthetic preparation, lookup,
+storage, and process peak RSS without downloading NCBI data. Full upstream
+metadata and taxonomy performance depends on their size and match distribution.

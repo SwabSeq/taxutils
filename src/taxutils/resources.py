@@ -149,12 +149,33 @@ def ensure_a2t_db(
     )
 
 
+def prepare_alternative_mappings(
+    save_folder=None,
+    canonical=True,
+    low_memory=True,
+    wgs=False,
+    refresh=False,
+    threads=None,
+):
+    """Prepare native viral metadata and, in indexed mode, sparse overrides."""
+    call_rust(
+        "prepare_alternative_mappings",
+        os.fspath(resolve_save_folder(save_folder)),
+        canonical,
+        low_memory,
+        wgs,
+        refresh,
+        threads,
+    )
+
+
 def build_a2t(
     accessions,
     save_folder=None,
     low_memory=True,
     wgs=False,
     threads=None,
+    canonical=True,
 ):
     """Return an accession-to-taxid map for the requested accessions."""
     return call_rust(
@@ -164,6 +185,7 @@ def build_a2t(
         low_memory,
         wgs,
         threads,
+        canonical,
     )
 
 
@@ -173,6 +195,7 @@ def get_t2a(
     low_memory=True,
     wgs=False,
     threads=None,
+    canonical=True,
 ):
     """Return the set of accessions assigned directly to the given taxa.
 
@@ -186,4 +209,5 @@ def get_t2a(
         low_memory,
         wgs,
         threads,
+        canonical,
     )
