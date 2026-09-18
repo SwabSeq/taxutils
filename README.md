@@ -44,6 +44,16 @@ If `TAXUTILS_GLOBALS` is not set, `taxutils` defaults to `./taxutils/` in the cu
 tu = taxutils(save_folder="/path/to/taxutils/saves")
 ```
 
+SQLite scratch files (including refresh staging tables and index-sort spills)
+are confined to a private `.taxutils-sqlite-*` directory inside the resolved save
+folder. This uses `TAXUTILS_GLOBALS` by default, with the usual explicit
+`save_folder` override; no additional environment variable or option is needed.
+There is no fallback to system temporary directories. If scratch cannot be
+created or written, the operation reports an error. Scratch directories are
+removed when connections close, including after errors and cancellation.
+A hard process kill can leave an operation's directory behind; these are not
+automatically swept because another process may still be using them.
+
 ## Threads
 
 Every parallel stage — gzip decoding, the accession database build and refresh, and the FASTA commands — takes its worker count from a single `threads` argument. `threads=None` (the default) uses all logical CPUs.

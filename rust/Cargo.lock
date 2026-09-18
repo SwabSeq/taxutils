@@ -1437,9 +1437,7 @@ checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 
 [[package]]
 name = "taxutils"
-version = "1.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0624c4079736ced0086f844eaf2acdc68bb79f9d22eca61c4e9688c030593499"
+version = "1.1.3"
 dependencies = [
  "anyhow",
  "clap",
