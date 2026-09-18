@@ -97,7 +97,9 @@ difference. Both the incoming dumps and the stored table are ordered by
 accession, so a single lockstep pass classifies every row as an insert, an
 update, or a deletion; accessions withdrawn upstream are removed. When the
 sources are unchanged, or the server cannot be reached, nothing is downloaded
-and the database is left alone.
+and the database is left alone. Adding WGS to a GB-only database uses one
+ordered atomic rebuild instead of staging and applying hundreds of millions of
+row changes. An existing WGS gzip is reused unless `refresh=True` was requested.
 
 The compressed NCBI mapping is always retained, because low-memory lookups scan
 it directly. If an installation will only ever use the SQLite database, the
