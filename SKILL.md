@@ -64,7 +64,7 @@ assert backend_info()["selected"] == "rust"
 ```
 
 Source builds require a Rust toolchain but not a sibling repository checkout.
-The extension depends on `taxutils >=1.1.1,<2` from crates.io. Refresh
+The extension depends on `taxutils >=1.1.2,<2` from crates.io. Refresh
 `rust/Cargo.lock` after compatible crate releases so Python wheels inherit the
 new backend; do not copy the crate source into this repository.
 
@@ -433,7 +433,7 @@ refreshed.
 
 ```toml
 [dependencies]
-taxutils = ">=1.1.1, <2"
+taxutils = ">=1.1.2, <2"
 ```
 
 For explicit database preparation:
