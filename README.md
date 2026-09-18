@@ -1,24 +1,6 @@
 # taxutils
 
-### Deduplicate FASTA records
-
-```sh
-taxutils deduplicate -i input.fasta -o unique.fasta
-taxutils deduplicate -i input.fasta  # atomic in-place rewrite
-```
-
-The Rust CLI exposes the same command as `tu deduplicate`. It keeps the first
-record for each parsed accession, including its version, preserving the original
-record bytes and order. Later records with that accession are removed even if
-their sequences differ. Identical sequences with different accessions remain.
-Headers without a parseable accession cause an error and leave the destination
-untouched. No taxonomy downloads are needed.
-
-Python callers can use
-`taxutils.deduplicate_fasta.deduplicate_fasta(input_path, output_path=None)`,
-which returns `{"kept": ..., "removed": ...}`.
-
-Utilities for working with NCBI taxonomic data, accession-to-taxon mappings, taxonomy branches, corrected ranks, and pathogen target taxa.
+Utilities for working with NCBI taxonomic data, accession-to-taxon mappings, taxonomy branches, corrected ranks, and pathogen target taxa. A version is available in Rust with optimized command-line functions, [taxutils-rs](https://github.com/SwabSeq/taxutils-rs), also available for install with bioconda.
 
 # Install
 
