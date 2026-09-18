@@ -46,7 +46,7 @@ class NativeBackendTests(unittest.TestCase):
 
         info = backend_info()
         self.assertEqual(info["selected"], "rust")
-        self.assertEqual(info["api_version"], 6)
+        self.assertEqual(info["api_version"], 8)
         self.assertEqual(
             set(info),
             {"selected", "rust_version", "api_version"},
