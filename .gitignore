@@ -14,7 +14,7 @@ src/taxutils/_rust*.pyd
 *.egg-info/
 .eggs/
 manuscript/
-
+meta.yaml
 # Virtual environments
 .venv/
 venv/

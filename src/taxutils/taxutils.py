@@ -27,6 +27,7 @@ from .resources import (
     download_targets,
     download_taxdump,
     ensure_a2t_db,
+    prepare_alternative_mappings,
     get_t2a,
 )
 from .topology import TopologyMixin
@@ -63,6 +64,7 @@ class TaxonomicUtils(TopologyMixin):
     _wgs: bool = False
     _save_folder: Optional[str] = None
     _threads: Optional[int] = None
+    _canonical: bool = True
 
     def __post_init__(self):
         if self.parent is None:
@@ -131,6 +133,7 @@ class TaxonomicUtils(TopologyMixin):
             low_memory=low_memory,
             wgs=wgs,
             threads=self._threads,
+            canonical=self._canonical,
         )
         if extend:
             existing.update(self.a2t or {})
@@ -162,6 +165,7 @@ class TaxonomicUtils(TopologyMixin):
             low_memory=low_memory,
             wgs=wgs,
             threads=self._threads,
+            canonical=self._canonical,
         )
         self._a2t_checked = True
         return accessions
@@ -394,6 +398,7 @@ def taxutils(
     save_folder=None,
     threads: Optional[int] = None,
     refresh: bool = False,
+    canonical: bool = True,
 ) -> TaxonomicUtils:
     """Download or load taxonomy resources and return a `TaxonomicUtils`.
 
@@ -401,6 +406,9 @@ def taxutils(
     database is built, so a first run needs no flags. `refresh=True` re-fetches
     the managed taxonomy files and brings an existing accession database up to
     date, applying only the rows NCBI added, changed or withdrew.
+
+    `canonical=False` applies viral strain/genotype alternatives to forward
+    and reverse accession lookups. The default preserves NCBI assignments.
 
     `threads` is the worker count for every parallel stage, including the
     accession database build; `None` uses all logical CPUs. `save_folder`
@@ -438,6 +446,11 @@ def taxutils(
             threads=threads,
         )
 
+    prepare_alternative_mappings(
+        save_folder=save_path, canonical=canonical, low_memory=low_memory,
+        wgs=wgs, refresh=refresh, threads=threads,
+    )
+
     a2t = None
     if accessions is not None:
         a2t = build_a2t(
@@ -446,6 +459,7 @@ def taxutils(
             low_memory=low_memory,
             wgs=wgs,
             threads=threads,
+            canonical=canonical,
         )
         a2t[UNCLASSIFIED] = "unclassified"
 
@@ -457,6 +471,7 @@ def taxutils(
         target_taxa=target_taxa,
         a2t=a2t,
         parent=parent,
+        _canonical=canonical,
         _low_memory=low_memory,
         _wgs=wgs,
         _save_folder=save_path,

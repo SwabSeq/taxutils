@@ -11,7 +11,7 @@ use pyo3::exceptions::{PyException, PyOSError, PyValueError};
 use pyo3::prelude::*;
 use taxutils_core::{self as core, CancellationToken, FilterMode};
 
-const BACKEND_API_VERSION: u32 = 6;
+const BACKEND_API_VERSION: u32 = 8;
 
 create_exception!(_rust, TaxutilsBackendError, PyException);
 
@@ -129,6 +129,25 @@ fn clean_fasta_headers(
 }
 
 #[pyfunction]
+#[pyo3(signature = (input_path, output_path=None, threads=None))]
+fn deduplicate_fasta(
+    py: Python<'_>,
+    input_path: PathBuf,
+    output_path: Option<PathBuf>,
+    threads: Option<usize>,
+) -> PyResult<(usize, usize)> {
+    let stats = interruptible(py, move |cancellation| {
+        core::deduplicate_fasta_with_cancel(
+            input_path,
+            output_path.as_deref(),
+            threads,
+            &cancellation,
+        )
+    })?;
+    Ok((stats.kept, stats.removed))
+}
+
+#[pyfunction]
 #[pyo3(signature = (input_path, accession_query, output_path, version=true, batch_size=1_000_000, verbose=false, threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn grep_fasta(
@@ -231,7 +250,31 @@ fn ensure_accession_database(
 }
 
 #[pyfunction]
-#[pyo3(signature = (save_folder, accessions, low_memory, wgs, threads=None))]
+#[pyo3(signature = (save_folder, canonical=true, low_memory=true, wgs=false, refresh=false, threads=None))]
+fn prepare_alternative_mappings(
+    py: Python<'_>,
+    save_folder: PathBuf,
+    canonical: bool,
+    low_memory: bool,
+    wgs: bool,
+    refresh: bool,
+    threads: Option<usize>,
+) -> PyResult<()> {
+    interruptible(py, move |cancel| {
+        core::prepare_alternative_mappings(
+            save_folder,
+            canonical,
+            low_memory,
+            wgs,
+            refresh,
+            threads,
+            &cancel,
+        )
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (save_folder, accessions, low_memory, wgs, threads=None, canonical=true))]
 fn lookup_accession_taxids(
     py: Python<'_>,
     save_folder: PathBuf,
@@ -239,36 +282,26 @@ fn lookup_accession_taxids(
     low_memory: bool,
     wgs: bool,
     threads: Option<usize>,
+    canonical: bool,
 ) -> PyResult<HashMap<String, i64>> {
     let requested = accessions.into_iter().collect::<HashSet<_>>();
-    if requested.is_empty() {
-        return Ok(HashMap::new());
-    }
-    interruptible(py, move |cancellation| {
-        if !low_memory {
-            core::ensure_accession_database_with_cancel(
-                &save_folder,
-                core::AccessionDatabaseOptions {
-                    wgs,
-                    threads,
-                    ..Default::default()
-                },
-                &cancellation,
-            )?;
-        }
-        core::lookup_accession_taxids_with_cancel(
+    interruptible(py, move |cancel| {
+        core::lookup_accession_taxids_with_options(
             save_folder,
             requested,
-            low_memory,
-            wgs,
-            threads,
-            &cancellation,
+            core::AccessionMappingOptions {
+                canonical,
+                low_memory,
+                wgs,
+                threads,
+            },
+            &cancel,
         )
     })
 }
 
 #[pyfunction]
-#[pyo3(signature = (save_folder, taxa, low_memory, wgs, threads=None))]
+#[pyo3(signature = (save_folder, taxa, low_memory, wgs, threads=None, canonical=true))]
 fn lookup_taxid_accessions(
     py: Python<'_>,
     save_folder: PathBuf,
@@ -276,29 +309,19 @@ fn lookup_taxid_accessions(
     low_memory: bool,
     wgs: bool,
     threads: Option<usize>,
+    canonical: bool,
 ) -> PyResult<HashSet<String>> {
-    if taxa.is_empty() {
-        return Ok(HashSet::new());
-    }
-    interruptible(py, move |cancellation| {
-        if !low_memory {
-            core::ensure_accession_database_with_cancel(
-                &save_folder,
-                core::AccessionDatabaseOptions {
-                    wgs,
-                    threads,
-                    ..Default::default()
-                },
-                &cancellation,
-            )?;
-        }
-        core::lookup_taxid_accessions_with_cancel(
+    interruptible(py, move |cancel| {
+        core::lookup_taxid_accessions_with_options(
             save_folder,
             &taxa,
-            low_memory,
-            wgs,
-            threads,
-            &cancellation,
+            core::AccessionMappingOptions {
+                canonical,
+                low_memory,
+                wgs,
+                threads,
+            },
+            &cancel,
         )
     })
 }
@@ -313,9 +336,11 @@ fn _rust(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(crate_version, module)?)?;
     module.add_function(wrap_pyfunction!(extract_accessions, module)?)?;
     module.add_function(wrap_pyfunction!(clean_fasta_headers, module)?)?;
+    module.add_function(wrap_pyfunction!(deduplicate_fasta, module)?)?;
     module.add_function(wrap_pyfunction!(grep_fasta, module)?)?;
     module.add_function(wrap_pyfunction!(filter_fasta, module)?)?;
     module.add_function(wrap_pyfunction!(ensure_accession_database, module)?)?;
+    module.add_function(wrap_pyfunction!(prepare_alternative_mappings, module)?)?;
     module.add_function(wrap_pyfunction!(lookup_accession_taxids, module)?)?;
     module.add_function(wrap_pyfunction!(lookup_taxid_accessions, module)?)?;
     Ok(())

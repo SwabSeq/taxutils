@@ -47,7 +47,7 @@ tu = taxutils(
 - `refresh=True`: re-fetches the managed taxonomy/target files and brings an existing SQLite database up to date, applying only the accessions NCBI added, changed, or withdrew. Skips the work entirely when the sources are unchanged. There is no separate rebuild switch: anything missing is downloaded, and a missing or unreadable database is rebuilt automatically.
 - `wgs=False`: default; uses `nucl_gb.accession2taxid.gz` only. Pass `wgs=True` to also download/use `nucl_wgs.accession2taxid.gz` for WGS/TSA accessions.
 
-SQLite mode always uses `nucl.accession2taxid.db`; if it was built GB-only, a later `wgs=True` call upgrades the same DB with WGS mappings. A database written before the current schema is detected and rebuilt once, automatically.
+SQLite mode always uses `nucl.accession2taxid.db`; if it was built GB-only, a later `wgs=True` call upgrades the same DB with one ordered atomic rebuild. An already-downloaded WGS gzip is reused unless `refresh=True` is requested. A database written before the current schema is detected and rebuilt once, automatically.
 
 Long backend calls are interruptible: `Ctrl-C` during a build or lookup raises `KeyboardInterrupt` promptly, discards the partial database, and leaves any installed database untouched.
 
@@ -64,7 +64,7 @@ assert backend_info()["selected"] == "rust"
 ```
 
 Source builds require a Rust toolchain but not a sibling repository checkout.
-The extension depends on `taxutils >=1.1.1,<2` from crates.io. Refresh
+The extension depends on `taxutils >=1.1.2,<2` from crates.io. Refresh
 `rust/Cargo.lock` after compatible crate releases so Python wheels inherit the
 new backend; do not copy the crate source into this repository.
 
@@ -433,7 +433,7 @@ refreshed.
 
 ```toml
 [dependencies]
-taxutils = ">=1.1.1, <2"
+taxutils = ">=1.1.2, <2"
 ```
 
 For explicit database preparation:
