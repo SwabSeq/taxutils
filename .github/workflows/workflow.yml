@@ -157,3 +157,6 @@ jobs:
 
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # The 1.1.6 sdist was uploaded manually before CI-built wheels.
+          skip-existing: true
