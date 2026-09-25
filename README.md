@@ -1,6 +1,20 @@
 # taxutils
 
-Utilities for working with NCBI taxonomic data, accession-to-taxon mappings, taxonomy branches, corrected ranks, and pathogen target taxa. A version is available in Rust with optimized command-line functions, [taxutils-rs](https://github.com/SwabSeq/taxutils-rs), also available for install with bioconda.
+Utilities for working with NCBI taxonomic data. If the Python interface is not needed, a port is available in Rust at [taxutils-rs](https://github.com/SwabSeq/taxutils-rs), available both as a crate and for install with bioconda.
+
+## Citation
+
+```bibtex
+@article{obrien2026taxutils,
+  title   = {taxutils: Tools for managing and operating on NCBI taxonomy and accession mappings},
+  author  = {O'Brien, William and Lee, Seungmo and Agarwal, Vivek and Eskin, Eleazar},
+  journal = {bioRxiv},
+  year    = {2026},
+  doi     = {10.64898/2026.09.18.752821}
+}
+```
+
+DOI: [10.64898/2026.09.18.752821](https://doi.org/10.64898/2026.09.18.752821)
 
 # Install
 
@@ -13,11 +27,6 @@ conda install bioconda::taxutils
 ```bash
 pip install taxutils
 ```
-
-`taxutils` requires its native Rust extension. Published wheels bundle the
-extension; there is no slower Python fallback for accession database or FASTA
-operations. An unsupported platform therefore fails at installation/import
-instead of silently changing performance or behavior.
 
 ```python
 from taxutils import backend_info
@@ -38,78 +47,22 @@ crates.io; a sibling `taxutils-rs` checkout is not required.
 export TAXUTILS_GLOBALS=/path/to/taxutils/saves
 ```
 
-If `TAXUTILS_GLOBALS` is not set, `taxutils` defaults to `./taxutils/` in the current working directory. It is the only environment variable `taxutils` reads, and it is only a default: `save_folder=` overrides it per call.
+If `TAXUTILS_GLOBALS` is not set, `taxutils` defaults to `./taxutils/` in the current working directory. It is the only environment variable `taxutils` reads, and it is only a default: `save_folder=` overrides it per call. We highly recommend setting this variable so that you maintain a single database across each of your projects.
 
 ```python
 tu = taxutils(save_folder="/path/to/taxutils/saves")
 ```
-
-SQLite scratch files (including refresh staging tables and index-sort spills)
-are confined to a private `.taxutils-sqlite-*` directory inside the resolved save
-folder. This uses `TAXUTILS_GLOBALS` by default, with the usual explicit
-`save_folder` override; no additional environment variable or option is needed.
-There is no fallback to system temporary directories. If scratch cannot be
-created or written, the operation reports an error. Scratch directories are
-removed when connections close, including after errors and cancellation.
-A hard process kill can leave an operation's directory behind; these are not
-automatically swept because another process may still be using them.
-
-## Threads
-
-Every parallel stage — gzip decoding, the accession database build and refresh, and the FASTA commands — takes its worker count from a single `threads` argument. `threads=None` (the default) uses all logical CPUs.
-
-```python
-tu = taxutils(low_memory=False, threads=8)   # cap the database build at 8 workers
-```
-
-The FASTA commands take the same value as `--threads`:
-
-```bash
-taxutils filter -i in.fasta -o out.fasta --remove-taxids 9606 --threads 8
-```
-
-Each call builds its own thread pool, so the setting applies to that operation only and never to the host process. `RAYON_NUM_THREADS` is not consulted.
-
-The first run downloads NCBI taxonomy files. Accession lookups also use the NCBI accession-to-taxon mapping, which is large. By default, `taxutils` uses low-memory mode and scans the compressed mapping directly. For faster repeated lookups, use `low_memory=False` to build or reuse a local SQLite database:
-
-```python
-from taxutils import taxutils
-
-tu = taxutils(low_memory=False)
-```
-
-Database construction is owned by `taxutils-rs`. Both NCBI dumps are already
-sorted by accession, so they are decompressed in parallel and merged into one
-ascending stream that fills the table in key order. The table is keyed on the
-accession itself (`WITHOUT ROWID`), so there is no second copy of every
-accession to store or sort, and the taxid index is covering for reverse
-lookups. The result is assembled beside the destination and installed
-atomically only once every row and index is complete.
-
-Long backend calls are interruptible: `Ctrl-C` during a build or a lookup
-raises `KeyboardInterrupt` promptly, removes the partial database, and leaves
-any database already installed untouched.
 
 ## Keeping the database current
 
 Anything missing is downloaded and a missing or unusable database is built
 automatically, so a first run needs no flags. To pick up new NCBI data, pass
 `refresh=True`: it re-fetches the managed taxonomy files and applies only the
-accessions NCBI added, changed or withdrew, skipping the work entirely when the
-sources are unchanged.
+accessions NCBI added, changed or withdrew.
 
 ```python
 tu = taxutils(low_memory=False, wgs=True, refresh=True)
 ```
-
-This asks NCBI whether each source has changed, and if so applies only the
-difference. Both the incoming dumps and the stored table are ordered by
-accession, so a single lockstep pass classifies every row as an insert, an
-update, or a deletion; accessions withdrawn upstream are removed. When the
-sources are unchanged, or the server cannot be reached, nothing is downloaded
-and the database is left alone. Adding WGS to a GB-only database uses one
-ordered atomic rebuild instead of staging and applying hundreds of millions of
-row changes. An existing WGS gzip is reused unless `refresh=True` was requested.
 
 The compressed NCBI mapping is always retained, because low-memory lookups scan
 it directly. If an installation will only ever use the SQLite database, the
@@ -148,7 +101,7 @@ tu.get_rank_order()                                       # Return canonical ran
 tu.higher_than_rank(taxa, rank)                           # Test whether taxa are higher than a rank.
 ```
 
-In taxutils, `accessions=list/of/accessions` can be passed to call load_a2t on construction of the taxutils object. A custom targets_json can similarly be passed in lieu of the default json explained below. A missing or unusable database is built from scratch automatically; `refresh=True` re-fetches the managed taxonomy files and updates an existing database in place, applying only the rows that changed upstream. By default, accession lookups use `nucl_gb.accession2taxid.gz`; pass `wgs=True` to also download/use `nucl_wgs.accession2taxid.gz` for WGS/TSA accessions. SQLite mode always uses `nucl.accession2taxid.db`; if it was built GB-only, a later `wgs=True` call upgrades the same DB with WGS mappings. `load_a2t` overwrites `tu.a2t` by default; pass `extend=True` to add missing mappings without discarding existing ones. Method-level `low_memory=None` and `wgs=None` use the modes set when `tu` was built. `save_folder` and `threads` are recorded on `tu` and reused by every later lookup.
+In taxutils, `accessions=list/of/accessions` can be passed to call load_a2t on construction of the taxutils object. A custom targets_json can similarly be passed in lieu of the default json explained below. A missing or unusable database is built from scratch automatically; `refresh=True` re-fetches the managed taxonomy files and updates an existing database in place, applying only the rows that changed upstream. By default, accession lookups use `nucl_gb.accession2taxid.gz`; pass `wgs=True` to also download/use `nucl_wgs.accession2taxid.gz` for WGS/TSA accessions. SQLite mode always uses `nucl.accession2taxid.db`; if it was built GB-only, a later `wgs=True` call upgrades the same DB with WGS mappings. `load_a2t` overwrites `tu.a2t` by default; pass `extend=True` to add missing mappings without discarding existing ones. Method-level `low_memory=None` and `wgs=None` use the modes set when `tu` was built. `save_folder` and `threads` are recorded on `tu` and reused by every later lookup. `canonical=True` (the default) preserves NCBI accession assignments, otherwise, with `canonical=False`, some accessions, mainly influenza A subtypes, derive taxonomic labels from NCBI's [AllNuclMetadata.csv](https://ftp.ncbi.nlm.nih.gov/genomes/Viruses/AllNuclMetadata/). 
 
 `parse_accession` accepts strings, lists, arrays, and pandas Series. It returns the first accession found from each string using the same container type where possible; missing accessions are returned as `"NA"`.
 
@@ -193,7 +146,7 @@ Pass `stat` to return one topology metric. A single taxon returns a scalar; a li
 
 The native backend comes from the
 [`taxutils` Rust crate](https://crates.io/crates/taxutils). It accelerates
-`load_a2t`, `get_t2a`, and the `extract`, `clean`, `grep`, and `filter` FASTA
+`load_a2t`, `get_t2a`, and the `extract`, `clean`, `grep`, `deduplicate`, and `filter` FASTA
 commands while preserving the Python APIs and return values. Runtime errors are
 not retried through Python, so a failed native file operation cannot be run
 twice accidentally. Long native FASTA operations release the GIL and respond to
@@ -204,14 +157,7 @@ Editable installs also compile an optimized Rust extension. After updating the
 source, rerun `python -m pip install -e .` to rebuild it; an older debug extension
 can make large accession scans substantially slower.
 
-pandas/NumPy-returning taxonomy methods remain implemented in Python. This
-avoids converting already-efficient in-memory containers merely to cross the
-Python/Rust boundary; additional batch methods will only move behind the native
-backend after container-specific benchmarks show a benefit.
-
-Run `python benchmarks/backend_benchmark.py` for native FASTA throughput or
-`python benchmarks/database_build_benchmark.py` for native SQLite construction
-throughput.
+pandas/NumPy-returning taxonomy methods remain implemented in Python and return the same datatype as passed as input.
 
 # Rank correction
 
@@ -226,42 +172,3 @@ In ZarLab, we are working on metagenomics in the clinical setting, with the goal
 Author: Will O'Brien  
 Affiliation: Computer Science Department, UCLA  
 Email: wob@cs.ucla.edu
-
-
-### Alternative viral accession mappings
-
-```python
-tu = taxutils(canonical=False, low_memory=False, threads=8)
-tu.load_a2t(accessions)
-```
-
-`canonical=True` (the default) preserves NCBI accession assignments. With
-`canonical=False`, Rust matches influenza A strains first, then H/N genotypes,
-then falls back to the NCBI mapping. Strain matches remain eligible when genotype
-is missing. Constructor accession lookups, `load_a2t`, and `get_t2a` all use this
-policy; reverse lookups remove accessions from their former assignments. Strain
-and subtype parsing is internal and adds no columns to `tu.nodes`.
-
-The first alternative-mode initialization downloads NCBI AllNuclMetadata and
-streams only accession, genotype, and strain into `viral.metadata.csv.gz` in the
-save folder. Canonical-only users do not need this download. Once present,
-`refresh=True` refreshes it alongside taxonomy resources. An unavailable or
-malformed alternative resource raises an error; an individual unmatched record
-uses its NCBI assignment.
-
-Indexed mode stores only differing assignments (plus successful matches absent
-from NCBI accession mappings) in `a2t_overrides`, with a taxid index for reverse
-queries. It shares the existing database without rewriting canonical rows.
-Metadata, taxonomy, or canonical-source changes invalidate the derived table.
-No source labels or redundant fallback values are stored.
-
-Low-memory mode creates no database. Forward lookup scans the trimmed gzip for
-requested accessions. Reverse lookup uses two metadata passes to find candidate
-accessions and resolve duplicate priorities without retaining every override.
-Rust caches private taxonomy matching dictionaries and processes bounded batches
-using the configured `threads`. Gzip scanning still has a sequential component;
-more workers are not guaranteed to improve small queries.
-
-`examples/benchmark_alternative_mappings.py` measures synthetic preparation, lookup,
-storage, and process peak RSS without downloading NCBI data. Full upstream
-metadata and taxonomy performance depends on their size and match distribution.
