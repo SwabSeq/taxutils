@@ -53,6 +53,19 @@ If `TAXUTILS_GLOBALS` is not set, `taxutils` defaults to `./taxutils/` in the cu
 tu = taxutils(save_folder="/path/to/taxutils/saves")
 ```
 
+With `low_memory=False`, the built `TaxonomicUtils` object is saved in
+`taxutils.pkl.gz` in the same save folder. Later calls load this compressed
+pickle directly, skipping names parsing, rank correction, parent mapping, and
+construction of target taxa. Gzip level 1 keeps compression and loading fast.
+The cache rebuilds if `names.dmp`, `nodes.dmp`, or the selected `targets_json`
+changes (path, size, or modification time), on `refresh=True`, or if it is
+unreadable or incompatible. Raw taxonomy files remain unchanged by caching.
+Current constructor options and requested accession lookups are applied on
+every call; accession mappings are not stored in the object cache. SQLite and
+alternative-mapping preparation still run as needed. `low_memory=True` does
+not read or write this cache. The older `cnodes.dmp` cache is no longer used
+and can be deleted.
+
 ## Keeping the database current
 
 Anything missing is downloaded and a missing or unusable database is built

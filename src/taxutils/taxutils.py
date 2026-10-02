@@ -16,6 +16,7 @@ from typing import List, Optional
 import numpy as np
 import pandas as pd
 
+from .cache import load_taxonomy_cache, save_taxonomy_cache, taxonomy_sources
 from .coerce import as_taxa_list, is_taxon_scalar, pairwise_taxa_result, pairwise_values
 from .parse import accessions_for_lookup, parse_accession
 from .ranks import assign_rank_codes, rank_to_code
@@ -413,6 +414,9 @@ def taxutils(
     `threads` is the worker count for every parallel stage, including the
     accession database build; `None` uses all logical CPUs. `save_folder`
     defaults to `$TAXUTILS_GLOBALS`, then `./taxutils/`.
+
+    `low_memory=False` caches the built taxonomy object in `taxutils.pkl.gz`
+    in that folder. Changed taxonomy/target sources or refresh rebuild it.
     """
     save_path = resolve_save_folder(save_folder)
     os.makedirs(save_path, exist_ok=True)
@@ -432,11 +436,35 @@ def taxutils(
         if refresh or not os.path.exists(targets_json):
             download_targets(targets_json)
 
-    logger.info("Building nodes...")
-    names = build_names(names_path)
-    nodes = build_nodes(nodes_path, names)
-    parent = build_parent(nodes)
-    target_taxa = build_target_taxa(nodes, names, targets_json=targets_json)
+    cache_path = os.path.join(save_path, "taxutils.pkl.gz")
+    sources = None
+    tu = None
+    if not low_memory:
+        sources = taxonomy_sources(names_path, nodes_path, targets_json)
+        if not refresh:
+            tu = load_taxonomy_cache(cache_path, sources, TaxonomicUtils)
+
+    cache_hit = tu is not None
+    if tu is None:
+        logger.info("Building taxonomy...")
+        names = build_names(names_path)
+        nodes = build_nodes(nodes_path, names)
+        parent = build_parent(nodes)
+        target_taxa = build_target_taxa(nodes, names, targets_json=targets_json)
+        names[2697049] = "SARS-CoV-2"
+        names[694009] = "SARS-related-CoV"
+        tu = TaxonomicUtils(
+            names=names, nodes=nodes, target_taxa=target_taxa, parent=parent,
+            _canonical=canonical, _low_memory=low_memory, _wgs=wgs,
+            _save_folder=save_path, _threads=threads,
+        )
+    else:
+        # Constructor options belong to this call, not the cached call.
+        tu._canonical = canonical
+        tu._low_memory = low_memory
+        tu._wgs = wgs
+        tu._save_folder = save_path
+        tu._threads = threads
 
     if refresh or not low_memory:
         ensure_a2t_db(
@@ -451,9 +479,12 @@ def taxutils(
         wgs=wgs, refresh=refresh, threads=threads,
     )
 
-    a2t = None
+    if not low_memory and not cache_hit:
+        save_taxonomy_cache(cache_path, sources, tu)
+
+    # Accessions are request-specific and never stored in the taxonomy cache.
     if accessions is not None:
-        a2t = build_a2t(
+        tu.a2t = build_a2t(
             accessions,
             save_folder=save_path,
             low_memory=low_memory,
@@ -461,22 +492,8 @@ def taxutils(
             threads=threads,
             canonical=canonical,
         )
-        a2t[UNCLASSIFIED] = "unclassified"
-
-    names[2697049] = "SARS-CoV-2"
-    names[694009] = "SARS-related-CoV"
-    return TaxonomicUtils(
-        names=names,
-        nodes=nodes,
-        target_taxa=target_taxa,
-        a2t=a2t,
-        parent=parent,
-        _canonical=canonical,
-        _low_memory=low_memory,
-        _wgs=wgs,
-        _save_folder=save_path,
-        _threads=threads,
-    )
+        tu.a2t[UNCLASSIFIED] = "unclassified"
+    return tu
 
 
 # `download_taxonomy` was the original entry point and stays as an alias.
