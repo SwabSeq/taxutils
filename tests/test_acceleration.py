@@ -34,7 +34,6 @@ class NativeBackendTests(unittest.TestCase):
             "13\t|\t2\t|\tspecies\t|\n"
             "15\t|\t2\t|\tspecies\t|\n"
         )
-        (cls.root / "targets.json").write_text('{"pathogens":{"example":13}}')
         cls.write_accession_fixture()
 
     @classmethod

@@ -8,10 +8,6 @@ UNCLASSIFIED = 0
 # Where taxonomy resources are downloaded to when a caller does not say.
 DEFAULT_SAVE_FOLDER = "./taxutils/"
 
-PATHOGEN_DICT_URLS = [
-    "https://web.cs.ucla.edu/~wob/projects/taxutils/targets.json",
-]
-
 RANK_ORDER = {"U": 0, "R": 1, "D": 2, "K": 3, "P": 4, "C": 5, "O": 6, "F": 7, "G": 8, "S": 9}
 CANONICAL_RANK_NAMES = {
     "U": "unclassified",

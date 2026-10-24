@@ -23,7 +23,6 @@ class AlternativeMappingTests(unittest.TestCase):
             "11 | intermediate | | scientific name |\n12 | subtype | | scientific name |\n"
             "13 | Influenza A virus (A/Test/1/2020(H1N1)) | | scientific name |\n"
         )
-        (self.root / "targets.json").write_text('{"pathogens": {}}')
         self.write_gzip("nucl_gb.accession2taxid.gz",
                         "accession\taccession.version\ttaxid\tgi\n"
                         "NC_000001\tNC_000001.1\t10\t0\n"

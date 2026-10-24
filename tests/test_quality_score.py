@@ -29,7 +29,7 @@ def fixture_taxonomy():
         "parent": list(parents.values()),
         "rank_base": ["R", "F", "G", "G", "S", "S", "S", "S"],
     })
-    return TaxonomicUtils({}, nodes, [], a2t={"NC_000001.1": 13}, parent=parents)
+    return TaxonomicUtils({}, nodes, a2t={"NC_000001.1": 13}, parent=parents)
 
 
 class QualityScoreTests(unittest.TestCase):

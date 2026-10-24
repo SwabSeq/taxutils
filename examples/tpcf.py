@@ -28,6 +28,8 @@ def parse_args():
         action="store_true",
         help="Print Kraken accession strings where no accession is found.",
     )
+    parser.add_argument("--target-taxids", type=int, nargs="+", required=True,
+                        help="Explicit target taxids for movement checks.")
     return parser.parse_args()
 
 
@@ -79,7 +81,7 @@ def main():
     rank_order = {rank: i for i, rank in enumerate(tu.get_rank_order())}
     out["labeled_rank"] = out["labeled_taxid"].map(ranks)
 
-    targets = set(tu.target_taxa)
+    targets = set(args.target_taxids)
     out["is_target"] = out["labeled_taxid"].isin(targets)
 
     family_anchor_cache = {}

@@ -41,7 +41,7 @@ crates.io; a sibling `taxutils-rs` checkout is not required.
 
 # Setup
 
-`taxutils` stores downloaded taxonomy files (`names.dmp`, `nodes.dmp`), pathogen target metadata, and accession-to-taxon mappings in a global save directory. Set `TAXUTILS_GLOBALS` before importing the package if you want to control where these files live:
+`taxutils` stores downloaded taxonomy files (`names.dmp`, `nodes.dmp`) and accession-to-taxon mappings in a global save directory. Set `TAXUTILS_GLOBALS` before importing the package if you want to control where these files live:
 
 ```bash
 export TAXUTILS_GLOBALS=/path/to/taxutils/saves
@@ -75,7 +75,7 @@ Core functions are listed here. See the example notebook for a fuller walkthroug
 
 ```python
 # Build object
-tu = taxutils(accessions=None, low_memory=True, targets_json=None, wgs=False, save_folder=None, threads=None, refresh=False, canonical=True)  # Build the taxonomy utility object.
+tu = taxutils(accessions=None, low_memory=True, wgs=False, save_folder=None, threads=None, refresh=False, canonical=True)  # Build the taxonomy utility object.
 
 # Accession parsing and mapping
 tu.parse_accession(header_strings, version=True)          # Extract one accession per string.
@@ -101,7 +101,7 @@ tu.get_rank_order()                                       # Return canonical ran
 tu.higher_than_rank(taxa, rank)                           # Test whether taxa are higher than a rank.
 ```
 
-In taxutils, `accessions=list/of/accessions` can be passed to call load_a2t on construction of the taxutils object. A custom targets_json can similarly be passed in lieu of the default json explained below. A missing or unusable database is built from scratch automatically; `refresh=True` re-fetches the managed taxonomy files and updates an existing database in place, applying only the rows that changed upstream. By default, accession lookups use `nucl_gb.accession2taxid.gz`; pass `wgs=True` to also download/use `nucl_wgs.accession2taxid.gz` for WGS/TSA accessions. SQLite mode always uses `nucl.accession2taxid.db`; if it was built GB-only, a later `wgs=True` call upgrades the same DB with WGS mappings. `load_a2t` overwrites `tu.a2t` by default; pass `extend=True` to add missing mappings without discarding existing ones. Method-level `low_memory=None` and `wgs=None` use the modes set when `tu` was built. `save_folder` and `threads` are recorded on `tu` and reused by every later lookup. `canonical=True` (the default) preserves NCBI accession assignments, otherwise, with `canonical=False`, some accessions, mainly influenza A subtypes, derive taxonomic labels from NCBI's [AllNuclMetadata.csv](https://ftp.ncbi.nlm.nih.gov/genomes/Viruses/AllNuclMetadata/). 
+In taxutils, `accessions=list/of/accessions` can be passed to call load_a2t on construction of the taxutils object. A missing or unusable database is built from scratch automatically; `refresh=True` re-fetches the managed taxonomy files and updates an existing database in place, applying only the rows that changed upstream. By default, accession lookups use `nucl_gb.accession2taxid.gz`; pass `wgs=True` to also download/use `nucl_wgs.accession2taxid.gz` for WGS/TSA accessions. SQLite mode always uses `nucl.accession2taxid.db`; if it was built GB-only, a later `wgs=True` call upgrades the same DB with WGS mappings. `load_a2t` overwrites `tu.a2t` by default; pass `extend=True` to add missing mappings without discarding existing ones. Method-level `low_memory=None` and `wgs=None` use the modes set when `tu` was built. `save_folder` and `threads` are recorded on `tu` and reused by every later lookup. `canonical=True` (the default) preserves NCBI accession assignments, otherwise, with `canonical=False`, some accessions, mainly influenza A subtypes, derive taxonomic labels from NCBI's [AllNuclMetadata.csv](https://ftp.ncbi.nlm.nih.gov/genomes/Viruses/AllNuclMetadata/).
 
 `parse_accession` accepts strings, lists, arrays, and pandas Series. It returns the first accession found from each string using the same container type where possible; missing accessions are returned as `"NA"`.
 
@@ -140,8 +140,6 @@ Pass `stat` to return one topology metric. A single taxon returns a scalar; a li
 - `branching_taxa_fraction`: fraction of subtree taxa with at least one child.
 - `top_child_fraction`: fraction of the anchor subtree contained in its largest immediate child branch.
 
-`tu.target_taxa` contains the default pathogen-derived target taxa. Use it directly for target filtering or movement checks.
-
 # Rust acceleration
 
 The native backend comes from the
@@ -163,9 +161,7 @@ pandas/NumPy-returning taxonomy methods remain implemented in Python and return 
 
 `taxutils` keeps the raw NCBI rank in `rank` and adds corrected rank columns. Canonical ranks (`R`, `D`, `K`, `P`, `C`, `O`, `F`, `G`, `S`) are used as anchors only when they move deeper than the corrected parent rank. Noncanonical ranks such as `no rank`, `clade`, and other unusual labels inherit position from the tree. If a child would be ranked at the same or a higher level than its parent, it is assigned a subrank such as `S2`, `S3`, or `F2`. The canonical name for the corrected rank is stored in `new_rank`.
 
-# Target taxa
-
-In ZarLab, we are working on metagenomics in the clinical setting, with the goal of creating an "agnostic diagnostic". We often want to look at broad array of taxa (`tu.target_taxa`) that could cause harm to people. In June 2024, CZI did the work of compiling a list of pathogenic taxa. I did the easy work of turning this into a json and uploading it to my website, so that it is available and easily accessed for all time (in case that link ever breaks). taxutils will extend the taxa list to include subtrees of each of those pathogenic taxa. It will additionally include SARS-CoV2, since it was excluded from CZI's list. If you find any other obvious, missing pathogens, please send me a note, so I can update my json. You can also update the target_taxa member variable yourself, or store an entirely different set of targets, if you wanted.
+In `tu.nodes`, `rank`, `rank_code`, `rank_base`, and `new_rank` use unordered pandas categoricals to save memory. Related rank names and codes share category sets, so comparisons such as `tu.nodes["rank"] != tu.nodes["new_rank"]` work directly. `taxon`, `parent`, and `rank_idx` remain integer columns. Use `value_counts()` to inspect rank frequencies (`value_counts()` includes unused categories with zero counts); use `groupby(..., observed=True)` when only observed categories are wanted. To assign a new label, add it with `.cat.add_categories(...)` first.
 
 # Contact
 

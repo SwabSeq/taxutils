@@ -24,8 +24,6 @@ from .resources import (
     build_a2t,
     build_names,
     build_nodes,
-    build_target_taxa,
-    download_targets,
     download_taxdump,
     ensure_a2t_db,
     prepare_alternative_mappings,
@@ -51,14 +49,10 @@ from .utils import (
     resolve_save_folder,
 )
 
-logger = get_logger(__name__)
-
-
 @dataclass
 class TaxonomicUtils(TopologyMixin):
     names: dict
     nodes: dict
-    target_taxa: list
     a2t: dict = None
     parent: dict = None
     _low_memory: bool = True
@@ -394,7 +388,6 @@ class TaxonomicUtils(TopologyMixin):
 def taxutils(
     accessions: List[str] = None,
     low_memory: bool = True,
-    targets_json=None,
     wgs: bool = False,
     save_folder=None,
     threads: Optional[int] = None,
@@ -416,7 +409,7 @@ def taxutils(
     defaults to `$TAXUTILS_GLOBALS`, then `./taxutils/`.
 
     `low_memory=False` caches the built taxonomy object in `taxutils.pkl.gz`
-    in that folder. Changed taxonomy/target sources or refresh rebuild it.
+    in that folder. Changed taxonomy sources or refresh rebuild it.
     """
     save_path = resolve_save_folder(save_folder)
     os.makedirs(save_path, exist_ok=True)
@@ -427,34 +420,28 @@ def taxutils(
     if refresh or not (os.path.exists(names_path) and os.path.exists(nodes_path)):
         download_taxdump(save_path, names_path, nodes_path)
     else:
-        logger.info(
+        get_logger(__name__).info(
             f"names.dmp and nodes.dmp exist in {save_path}, skipping download."
         )
-
-    if targets_json is None:
-        targets_json = os.path.join(save_path, "targets.json")
-        if refresh or not os.path.exists(targets_json):
-            download_targets(targets_json)
 
     cache_path = os.path.join(save_path, "taxutils.pkl.gz")
     sources = None
     tu = None
     if not low_memory:
-        sources = taxonomy_sources(names_path, nodes_path, targets_json)
+        sources = taxonomy_sources(names_path, nodes_path)
         if not refresh:
             tu = load_taxonomy_cache(cache_path, sources, TaxonomicUtils)
 
     cache_hit = tu is not None
     if tu is None:
-        logger.info("Building taxonomy...")
+        get_logger(__name__).info("Building taxonomy...")
         names = build_names(names_path)
         nodes = build_nodes(nodes_path, names)
         parent = build_parent(nodes)
-        target_taxa = build_target_taxa(nodes, names, targets_json=targets_json)
         names[2697049] = "SARS-CoV-2"
         names[694009] = "SARS-related-CoV"
         tu = TaxonomicUtils(
-            names=names, nodes=nodes, target_taxa=target_taxa, parent=parent,
+            names=names, nodes=nodes, parent=parent,
             _canonical=canonical, _low_memory=low_memory, _wgs=wgs,
             _save_folder=save_path, _threads=threads,
         )

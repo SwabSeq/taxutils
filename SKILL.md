@@ -24,7 +24,7 @@ print(backend_info())
 tu = taxutils(low_memory=False, threads=8)
 ```
 
-If `TAXUTILS_GLOBALS` is not set, resources are stored under `./taxutils/` relative to the current working directory. Managed resources include `names.dmp`, `nodes.dmp`, `targets.json`, `nucl_gb.accession2taxid.gz`, optionally `nucl_wgs.accession2taxid.gz`, and optionally `nucl.accession2taxid.db`.
+If `TAXUTILS_GLOBALS` is not set, resources are stored under `./taxutils/` relative to the current working directory. Managed resources include `names.dmp`, `nodes.dmp`, `nucl_gb.accession2taxid.gz`, optionally `nucl_wgs.accession2taxid.gz`, and optionally `nucl.accession2taxid.db`.
 
 Use:
 
@@ -32,7 +32,6 @@ Use:
 tu = taxutils(
     accessions=None,
     low_memory=True,
-    targets_json=None,
     wgs=False,
     save_folder=None,
     threads=None,
@@ -43,8 +42,7 @@ tu = taxutils(
 - `accessions`: optional accession/header list to load into `tu.a2t` during construction.
 - `low_memory=True`: default; scans compressed accession2taxid files for requested lookups.
 - `low_memory=False`: builds/reuses a SQLite accession database for faster repeated lookup work. The first build is the expensive one; it decompresses the sources in parallel and merges them into the table in key order.
-- `targets_json`: custom pathogen/target JSON path in place of the default downloaded target list.
-- `refresh=True`: re-fetches the managed taxonomy/target files and brings an existing SQLite database up to date, applying only the accessions NCBI added, changed, or withdrew. Skips the work entirely when the sources are unchanged. There is no separate rebuild switch: anything missing is downloaded, and a missing or unreadable database is rebuilt automatically.
+- `refresh=True`: re-fetches the managed taxonomy files and brings an existing SQLite database up to date, applying only the accessions NCBI added, changed, or withdrew. Skips the work entirely when the sources are unchanged. There is no separate rebuild switch: anything missing is downloaded, and a missing or unreadable database is rebuilt automatically.
 - `wgs=False`: default; uses `nucl_gb.accession2taxid.gz` only. Pass `wgs=True` to also download/use `nucl_wgs.accession2taxid.gz` for WGS/TSA accessions.
 
 SQLite mode always uses `nucl.accession2taxid.db`; if it was built GB-only, a later `wgs=True` call upgrades the same DB with one ordered atomic rebuild. An already-downloaded WGS gzip is reused unless `refresh=True` is requested. A database written before the current schema is detected and rebuilt once, automatically.
@@ -118,7 +116,6 @@ Important members:
 - `tu.names`: `{taxon: scientific_name}` including `0: "unclassified"` plus patched SARS-CoV-2 names.
 - `tu.nodes`: pandas DataFrame with `taxon`, `parent`, raw NCBI `rank`, corrected `rank_code`, `rank_base`, `rank_idx`, and `new_rank`.
 - `tu.parent`: `{taxon: parent_taxon}` with root `1` mapped to `None`.
-- `tu.target_taxa`: taxonomically ordered pathogen target taxa.
 - `tu.a2t`: accession-to-taxid map after construction with `accessions=` or after `load_a2t`.
 
 The object repr lists available public methods.
@@ -338,24 +335,9 @@ tu.nodes["name"] = tu.nodes["taxon"].map(tu.names)
 mismatches = tu.nodes[tu.nodes["new_rank"] != tu.nodes["rank"]]
 ```
 
-## Target Taxa
-
-`tu.target_taxa` is built from `targets_json`, defaulting to the package-managed pathogen target list. The package expands target taxa through descendants and relevant lower-rank ancestors, then returns them in taxonomic order.
-
-Use it directly for pathogen filtering:
-
-```python
-target_species = tu.nodes[
-    tu.nodes["taxon"].isin(tu.target_taxa)
-    & tu.nodes["rank_base"].eq("S")
-]
-```
-
-For a custom target universe, pass `targets_json=` during construction or assign your own ordered list/set to `tu.target_taxa`.
-
 ## Kraken Read-Level Movement Analysis
 
-For Kraken read-level classification output, use indexed mode, parse the accession column directly, and use the package target set:
+For Kraken read-level classification output, use indexed mode, parse the accession column directly, and choose an explicit target set:
 
 ```python
 from taxutils import taxutils
@@ -372,7 +354,7 @@ out["accession"] = tu.parse_accession(out["accession"])
 tu.load_a2t(out["accession"].dropna().unique().tolist())
 out["labeled_taxid"] = out["accession"].map(tu.a2t)
 
-targets = set(tu.target_taxa)
+targets = set(tu.get_subtree(12059))  # Example: enterovirus taxa.
 out["is_target"] = out["labeled_taxid"].isin(targets)
 ```
 

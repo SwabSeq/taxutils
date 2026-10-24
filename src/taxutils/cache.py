@@ -9,14 +9,6 @@ import pandas as pd
 
 from .utils import get_logger
 
-logger = get_logger(__name__)
-
-# Increment when taxonomy construction, object layout, or rank rules change.
-TAXONOMY_CACHE_VERSION = 1
-NODE_COLUMNS = (
-    "taxon", "parent", "rank", "rank_code", "rank_base", "rank_idx", "new_rank",
-)
-
 
 def taxonomy_sources(*paths):
     """Fingerprint all taxonomy inputs without reading large source files."""
@@ -32,7 +24,10 @@ def load_taxonomy_cache(cache_path, sources, object_type):
     try:
         with gzip.open(cache_path, "rb") as cached:
             header = pickle.load(cached)
-            if header != (TAXONOMY_CACHE_VERSION, sources):
+            # Accept the source fingerprints from older, versioned headers.
+            if isinstance(header, tuple) and len(header) == 2 and isinstance(header[0], int):
+                header = header[1]
+            if header != sources:
                 return None
             tu = pickle.load(cached)
             # Consume the trailer so truncated or checksum-invalid gzip files
@@ -42,10 +37,16 @@ def load_taxonomy_cache(cache_path, sources, object_type):
         if not (
             isinstance(tu, object_type)
             and isinstance(tu.nodes, pd.DataFrame)
-            and tuple(tu.nodes.columns) == NODE_COLUMNS
+            and tuple(tu.nodes.columns) == (
+                "taxon", "parent", "rank", "rank_code", "rank_base", "rank_idx", "new_rank",
+            )
+            and all(isinstance(tu.nodes[column].dtype, pd.CategoricalDtype)
+                    for column in ("rank", "rank_code", "rank_base", "new_rank"))
+            and tu.nodes["rank"].dtype == tu.nodes["new_rank"].dtype
+            and tu.nodes["rank_code"].dtype == tu.nodes["rank_base"].dtype
             and isinstance(tu.names, dict)
             and isinstance(tu.parent, dict)
-            and isinstance(tu.target_taxa, list)
+            and not hasattr(tu, "target_taxa")
             and tu.a2t is None
             and tu._tree is None
             and tu._descendant_index is None
@@ -53,12 +54,12 @@ def load_taxonomy_cache(cache_path, sources, object_type):
             and tu._a2t_checked is False
         ):
             return None
-        logger.info(f"Loading built taxonomy from {cache_path}...")
+        get_logger(__name__).info(f"Loading built taxonomy from {cache_path}...")
         return tu
     except FileNotFoundError:
         return None
     except Exception as error:
-        logger.warning(f"Could not read taxonomy cache {cache_path}: {error}")
+        get_logger(__name__).warning(f"Could not read taxonomy cache {cache_path}: {error}")
         return None
 
 
@@ -72,11 +73,11 @@ def save_taxonomy_cache(cache_path, sources, tu):
         ) as output:
             temporary_path = output.name
             with gzip.GzipFile(fileobj=output, mode="wb", compresslevel=1, mtime=0) as cached:
-                pickle.dump((TAXONOMY_CACHE_VERSION, sources), cached, protocol=pickle.HIGHEST_PROTOCOL)
+                pickle.dump(sources, cached, protocol=pickle.HIGHEST_PROTOCOL)
                 pickle.dump(tu, cached, protocol=pickle.HIGHEST_PROTOCOL)
         os.replace(temporary_path, cache_path)
     except Exception as error:
-        logger.warning(f"Could not save taxonomy cache {cache_path}: {error}")
+        get_logger(__name__).warning(f"Could not save taxonomy cache {cache_path}: {error}")
     finally:
         if temporary_path is not None:
             try:
@@ -84,4 +85,4 @@ def save_taxonomy_cache(cache_path, sources, tu):
             except FileNotFoundError:
                 pass
             except OSError as error:
-                logger.warning(f"Could not remove temporary taxonomy cache: {error}")
+                get_logger(__name__).warning(f"Could not remove temporary taxonomy cache: {error}")

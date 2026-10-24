@@ -5,7 +5,6 @@ implicit value is the `TAXUTILS_GLOBALS` default resolved by
 `utils.resolve_save_folder`, and that happens once at the caller's boundary.
 """
 
-import json
 import os
 import shutil
 import tarfile
@@ -16,19 +15,13 @@ import pandas as pd
 from .backend import call_rust
 from .parse import accessions_for_lookup
 from .ranks import assign_rank_codes
-from .tree import build_children, build_parent, get_parents, get_subtree, taxonomic_order
 from .utils import (
     CANONICAL_RANK_NAMES,
-    PATHOGEN_DICT_URLS,
     RANK_ORDER,
     UNCLASSIFIED,
     get_logger,
     resolve_save_folder,
 )
-
-logger = get_logger(__name__)
-
-TAXDUMP_URL = "https://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz"
 
 
 def download_file(url, path):
@@ -44,9 +37,9 @@ def download_file(url, path):
 
 def download_taxdump(save_path, names_path, nodes_path):
     """Fetch names.dmp and nodes.dmp out of the NCBI taxdump tarball."""
-    logger.info(f"Downloading {names_path}, {nodes_path}...")
+    get_logger(__name__).info(f"Downloading {names_path}, {nodes_path}...")
     tarball_path = os.path.join(save_path, "taxdump.tar.gz")
-    download_file(TAXDUMP_URL, tarball_path)
+    download_file("https://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz", tarball_path)
 
     with tarfile.open(tarball_path, "r:gz") as tar:
         members = {member.name: member for member in tar.getmembers()}
@@ -63,18 +56,6 @@ def download_taxdump(save_path, names_path, nodes_path):
                 shutil.copyfileobj(source, out)
 
     os.remove(tarball_path)
-
-
-def download_targets(targets_json):
-    """Fetch the pathogen target list, trying each configured mirror."""
-    for url in PATHOGEN_DICT_URLS:
-        try:
-            logger.info(f"Downloading targets.json from {url}...")
-            download_file(url, targets_json)
-            return
-        except Exception as e:
-            logger.warning(f"Failed to download from {url}: {e}")
-    raise RuntimeError("Could not download targets.json from any URL.")
 
 
 def build_names(names_path):
@@ -106,25 +87,20 @@ def build_nodes(nodes_path, names):
     nodes["rank_idx"] = nodes["rank_base"].map(RANK_ORDER)
     nodes["new_rank"] = nodes["rank_base"].map(CANONICAL_RANK_NAMES)
 
+    # Related columns need identical categories for elementwise comparisons.
+    # Include every canonical label even when absent from this taxonomy.
+    for columns, canonical in (
+        (("rank", "new_rank"), CANONICAL_RANK_NAMES.values()),
+        (("rank_code", "rank_base"), RANK_ORDER),
+    ):
+        categories = pd.Index(canonical)
+        for column in columns:
+            categories = categories.union(nodes[column].unique(), sort=False)
+        dtype = pd.CategoricalDtype(categories=categories, ordered=False)
+        for column in columns:
+            nodes[column] = nodes[column].astype(dtype)
+
     return nodes
-
-
-def build_target_taxa(nodes, names, targets_json):
-    with open(targets_json) as f:
-        pdict = json.load(f)
-    pathogen_taxa = {int(v) for v in pdict["pathogens"].values()}
-
-    parent = build_parent(nodes)
-    tree = build_children(parent)
-    rank = dict(zip(nodes["taxon"], nodes["rank_code"]))
-    rank_idx = dict(zip(nodes["taxon"], nodes["rank_idx"]))
-
-    taxa = set()
-    for taxon in pathogen_taxa:
-        taxa.update(get_subtree(taxon, tree))
-        taxa.update(get_parents(taxon, parent, rank_idx, rank="F"))
-
-    return taxonomic_order(taxa, parent, rank, names)
 
 
 def ensure_a2t_db(
